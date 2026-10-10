@@ -1,0 +1,64 @@
+# Re-indexes Papertrade deposits on a schedule and publishes site/ to GitHub Pages.
+# Enable Pages with "Source: GitHub Actions" in the repository settings once.
+name: depositors
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # GitHub runs scheduled jobs with some delay; expect 10-20 min between updates
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: depositors-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # The checkpoint keeps every decoded event; restoring it turns each run into a
+      # small incremental scan. If the cache is lost the run rescans from genesis (~5 min).
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/depositors/checkpoint.json
+            data/summary.jsonl
+          key: depositors-checkpoint-${{ github.run_id }}
+          restore-keys: depositors-checkpoint-
+
+      - run: npm run depositors:index
+        env:
+          PAPERTRADE_RPCS: ${{ vars.PAPERTRADE_RPCS }}   # optional: comma-separated RPC endpoints
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            data/depositors/checkpoint.json
+            data/summary.jsonl
+          key: depositors-checkpoint-${{ github.run_id }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

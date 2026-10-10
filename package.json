@@ -1,0 +1,23 @@
+{
+  "name": "paperboards",
+  "private": true,
+  "type": "module",
+  "description": "Papertrade leaderboards and protocol stats built from the public API and HyperEVM logs.",
+  "scripts": {
+    "depositors:index": "tsx src/depositors/indexer.ts",
+    "depositors:serve": "tsx src/depositors/serve.ts",
+    "summary:record": "node --import tsx src/summary-recorder.ts",
+    "summary:report": "node --import tsx src/summary-recorder.ts --report",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "tsx": "4.23.15",
+    "viem": "2.57.4"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}

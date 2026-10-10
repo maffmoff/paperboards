@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>paperboards · papertrade</title>
+<meta name="description" content="Papertrade wallets with balance, PAPER, PnL, acquisition cost and staking rewards, from the official leaderboard and HyperEVM logs.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand">paperboards</span>
+  <nav class="views" aria-label="Pages">
+    <a href="#leaderboard" data-view="leaderboard">Leaderboard</a>
+    <a href="#stats" data-view="stats">Stats</a>
+  </nav>
+  <span class="updated" id="updated"></span>
+</header>
+
+<main class="board">
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>Overview</h2><span class="sub">all depositors</span></div>
+    <div class="kpis" id="tape" aria-live="polite"></div>
+  </section>
+
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>Mint rate</h2><span class="sub" id="minthint">paper per $ of realized loss · docs curve on the live summary</span></div>
+    <div class="kpis" id="mintkpis"></div>
+    <div class="charts charts-2" id="mintcharts"></div>
+  </section>
+
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>History</h2><span class="sub" id="histhint">hourly · hover a chart to read every metric at that hour</span></div>
+    <div class="charts" id="charts"></div>
+  </section>
+
+  <section class="panel" data-page="leaderboard">
+    <div class="panel-head controls">
+      <h2>Leaderboard</h2>
+      <div class="seg" id="modes" role="group" aria-label="View">
+        <button type="button" data-mode="wallets" class="on" title="one row per wallet address">Wallets</button>
+        <button type="button" data-mode="entities" title="wallets grouped by display name (papertrade, else hyperliquid), e.g. paperstrategy1…72 → paperstrategy">Entities</button>
+      </div>
+      <label class="minpaper">Min PAPER
+        <select id="minpaper" aria-label="Minimum PAPER held">
+          <option value="0">All</option>
+          <option value="100000">100K</option>
+          <option value="1000000">1M</option>
+          <option value="10000000">10M</option>
+        </select>
+      </label>
+      <input id="q" type="search" placeholder="Search wallet or name" autocomplete="off" spellcheck="false" aria-label="Search">
+      <span class="sub hint" id="modehint">one row per wallet</span>
+    </div>
+    <div class="table-wrap">
+  <table id="table">
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th><button type="button" data-sort="wallet" id="th-wallet">wallet</button></th>
+        <th class="num"><button type="button" data-sort="balance" title="account value: deposited − withdrawn + pnl + rewards claimed (matches the official portfolio equity)">balance</button></th>
+        <th class="num"><button type="button" data-sort="paper" title="PAPER held, from the official leaderboard">paper</button></th>
+        <th class="num"><button type="button" data-sort="share" title="share of total PAPER supply">share</button></th>
+        <th class="num"><button type="button" data-sort="pnl" title="trade pnl: realized + unrealized, from the official leaderboard">trade pnl</button></th>
+        <th class="num"><button type="button" data-sort="netPnl" title="trade pnl + staking rewards (claimed + unclaimed)">net pnl</button></th>
+        <th class="num"><button type="button" data-sort="cost" title="acquisition cost per PAPER: −pnl ÷ paper">$/paper</button></th>
+        <th class="num"><button type="button" data-sort="rewards" title="USDC staking rewards: claimed + unclaimed (PaperStaking)">rewards</button></th>
+        <th class="num"><button type="button" data-sort="deposited">deposited</button></th>
+        <th class="num"><button type="button" data-sort="withdrawn">withdrawn</button></th>
+        <th class="num"><button type="button" data-sort="count">deposits</button></th>
+        <th class="num"><button type="button" data-sort="largest">largest</button></th>
+        <th class="num"><button type="button" data-sort="first">first</button></th>
+        <th class="num"><button type="button" data-sort="last">last</button></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+    </div>
+    <p id="empty" class="empty" hidden>No match</p>
+    <nav class="pager">
+      <button id="prev" type="button">‹ Prev</button>
+      <span id="pageinfo"></span>
+      <button id="next" type="button">Next ›</button>
+    </nav>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Sources</h2><span class="sub">public api and hyperevm logs</span></div>
+    <footer class="foot" id="meta"></footer>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
