@@ -91,9 +91,10 @@
       ["paper supply", paper(p.paperSupply), growth, "PAPER now, minted over the period and the growth that is (inflation)", m && pts(m.paperSupply), paper],
       ["mint rate", d.mint && typeof d.mint.ratePerUsd === "number" ? `${d.mint.ratePerUsd.toFixed(1)} / $` : "–", null, "PAPER per $1 of realized loss now; shaded = cliff dip (lp below the mint-decay threshold)", mintPts, (v) => `${v.toFixed(1)}/$`, false, dips],
     ];
-    box.innerHTML = rows.map(([label, value, sub, title, points], i) => `<div class="mrow${points ? "" : " nochart"}"${title ? ` title="${esc(title)}"` : ""}>
-      <div class="mhead"><span>${esc(label)}</span><b>${esc(value)}</b>${sub ? `<em>${esc(sub)}</em>` : ""}</div>
-      ${points ? `<figure class="chart" data-i="${i}"><figcaption><span></span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(label)} history"></svg></figure>` : ""}
+    // Watchlist rows: name | value | related figure | sparkline | the sparkline's value at the hovered time.
+    box.innerHTML = rows.map(([label, value, sub, title, points], i) => `<div class="wrow"${title ? ` title="${esc(title)}"` : ""}>
+      <span class="wl">${esc(label)}</span><b class="wv">${esc(value)}</b><em class="ws">${esc(sub || "")}</em>
+      ${points ? `<figure class="chart spark" data-i="${i}"><figcaption><span></span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(label)} history"></svg></figure>` : `<span></span>`}
     </div>`).join("");
     const base = `hourly · ${hours == null ? "since genesis" : hours < 24 ? "last 24 h" : `last ${hours >= 168 ? `${hours / 24} days` : `${hours} h`}`} · hover a chart to read every row at that time`;
     $("activityhint").textContent = base;
@@ -101,7 +102,7 @@
     const hover = (msAt) => { draws.forEach((g) => g(msAt)); $("activityhint").textContent = msAt == null ? base : hourLabel(msAt); };
     rows.forEach(([, , , , points, fmt, bars, bands], i) => {
       if (!points) return;
-      draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, bands }));
+      draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, bands, compact: true }));
     });
   }
 
@@ -114,13 +115,14 @@
     let lo = Math.min(0, ...pts.map(([, v]) => v)), hi = Math.max(0, ...pts.map(([, v]) => v));
     if (lo === hi) hi = lo + 1;
     const pad = (hi - lo) * 0.08; lo -= lo < 0 ? pad : 0; hi += pad;
-    const ticks = [hi - pad, (lo + hi - pad) / 2, lo < 0 ? lo + pad : 0];
-    const W = Math.max(200, fig.clientWidth), H = 132, L = Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10, R = 10, T = 8, B = 20;
+    const ticks = opts.compact ? [] : [hi - pad, (lo + hi - pad) / 2, lo < 0 ? lo + pad : 0];
+    const W = Math.max(opts.compact ? 120 : 200, fig.querySelector("svg").clientWidth || fig.clientWidth);
+    const H = opts.compact ? 36 : 132, L = opts.compact ? 1 : Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10, R = opts.compact ? 1 : 10, T = opts.compact ? 3 : 8, B = opts.compact ? 3 : 20;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
     const x = (ms) => L + ((ms - t0) / Math.max(1, t1 - t0)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
     let marks = "";
     if (opts.bars) {
-      const bw = Math.max(1, ((W - L - R) / Math.max(1, points.length)) * 0.7);
+      const bw = Math.max(1, ((W - L - R) / Math.max(1, points.length)) * (opts.compact ? 0.8 : 0.7));
       marks = pts.map(([ms, v]) => `<rect class="${v < 0 ? "barneg" : "bar"}" x="${(x(ms) - bw / 2).toFixed(1)}" y="${Math.min(y(v), y(0)).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, Math.abs(y(v) - y(0))).toFixed(1)}"/>`).join("");
     } else {
       let path = "", pen = false;
@@ -132,7 +134,7 @@
       return `<rect class="dipband" x="${x0.toFixed(1)}" y="${T}" width="${(x1 - x0).toFixed(1)}" height="${H - T - B}"><title>${esc(`cliff dip ${hourLabel(a)} → ${dp.toAt ? hourLabel(b) : "now"}`)}</title></rect>`;
     }).join("");
     svg.innerHTML = ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${esc(fmt(v))}</text>`).join("")
-      + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(t0))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(t1))}</text>`
+      + (opts.compact ? (lo < 0 ? `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>` : "") : `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(t0))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(t1))}</text>`)
       + bands + marks + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
     const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
     const nearest = (ms) => pts.reduce((best, p) => (Math.abs(p[0] - ms) < Math.abs(best[0] - ms) ? p : best), pts[0]);
