@@ -45,7 +45,6 @@
     }
     items.push(
       kpi("user balances", usd(balances), "sum of every depositor's account value; not TVL", `${count(users)} users`),
-      kpi("staked", p.paperSupply ? pct(p.paperStaked / p.paperSupply) : "–", "", `of ${paper(p.paperSupply)} supply`),
       kpi("max supply ≈", paper(max), "", "if lp never dips below the cliff"),
       kpi("valuation", max != null && p.avgCost != null ? usd(p.avgCost * max) : "–", "all-time average cost per PAPER × max supply", p.avgCost != null ? `${unit(p.avgCost)} / paper × max supply` : ""),
     );
