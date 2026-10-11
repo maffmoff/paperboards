@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { curveParams, mintRateAtLp, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
+import { curveParams, mintRateAtLp, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
 
 const hourly = (values: (i: number) => number, n = 30) => Array.from({ length: n }, (_, i) => values(i));
 const H = 3_600_000;
@@ -90,5 +90,42 @@ describe("reward curve", () => {
 
   it("pays stakers 0% below zero LP, 1% up to the cap, 99% from the cap", () => {
     expect([stakerSharePct(-1, c), stakerSharePct(0, c), stakerSharePct(4.99e6, c), stakerSharePct(5e6, c)]).toEqual([0, 1, 1, 99]);
+  });
+});
+
+describe("periodRates", () => {
+  // 30 hourly points; PAPER starts at index 20 (10 populated hours), 100 PAPER and $1 of loss minted per hour.
+  const zeros = (i: number, v: number) => (i < 20 ? 0 : v);
+  const h = {
+    startMs: 0,
+    intervalMs: H,
+    columns: {
+      paperSupply: hourly((i) => zeros(i, 1000 + 100 * (i - 20))),
+      paperStaked: hourly((i) => zeros(i, 500)),
+      stakingRewards: hourly((i) => zeros(i, 2 * (i - 20))),
+      traderPnl: hourly((i) => zeros(i, -10 - (i - 20))),
+    },
+  };
+  const p = periodRates(h)!;
+
+  it("covers 1h and 1d windows, clamping the ones longer than the minted history", () => {
+    expect(p["1h"]).toMatchObject({ hours: 1, clamped: false, rewards: 2, costPerPaper: 0.01 });
+    expect(p["1h"]!.inflation).toBeCloseTo(100 / 1800);
+    // Longer than the 10 minted hours: the whole history, including the first minted hour.
+    expect(p["1d"]).toMatchObject({ hours: 10, clamped: true, rewards: 18 });
+    expect(p["7d"]).toMatchObject({ hours: 10, clamped: true });
+    expect(p.all).toMatchObject({ hours: 10, clamped: false });
+    expect(p["1d"]!.inflation).toBeCloseTo(1900 / 1000 - 1);
+  });
+
+  it("makes the all-time cost the cumulative average (-pnl / supply)", () => {
+    expect(p.all!.costPerPaper).toBeCloseTo(19 / 1900);
+    expect(p["30d"]!.costPerPaper).toBeCloseTo(19 / 1900);
+  });
+
+  it("annualizes rewards per staked PAPER and divides by the all-time average cost", () => {
+    const ppy = (2 / 500) * 365 * 24;
+    expect(p["1h"]!.rewardPerPaperYear).toBeCloseTo(ppy);
+    expect(p["1h"]!.apr).toBeCloseTo(ppy / (19 / 1900));
   });
 });

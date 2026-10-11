@@ -137,27 +137,56 @@
     return c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress);
   }
 
+  const PERIOD_NAMES = { "1h": "1H", "1d": "1D", "7d": "7D", "30d": "30D", all: "all time" };
+  let period = "1d";
+  try { const v = localStorage.getItem("paperboards.period"); if (v in PERIOD_NAMES) period = v; } catch { /* storage unavailable */ }
+  function periodItems(p) {
+    const w = p.periods && p.periods[period];
+    if (!p.periods) {
+      // Older data without per-period figures: the single trailing window.
+      return [["inflation", p.inflation == null ? "–" : `+${pct(p.inflation, 1)}`], ["staker rewards", p.rewards == null ? "–" : usdShort(p.rewards)], ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
+        ["reward / paper / yr", p.rewardPerPaperYear == null ? "–" : `$${p.rewardPerPaperYear.toFixed(4)}`], ["avg cost / paper · all-time average", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`]];
+    }
+    const tag = `${PERIOD_NAMES[period]}${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
+    const money = (v) => (v == null ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(4)}`);
+    return [
+      [`inflation · ${tag}`, !w || w.inflation == null ? "–" : `+${pct(w.inflation, w.inflation < 0.01 ? 2 : 1)}`],
+      [`staker rewards · ${tag}`, !w || w.rewards == null ? "–" : usdShort(w.rewards)],
+      [`apr · ${tag}`, !w || w.apr == null ? "–" : pct(w.apr, 0)],
+      [`avg cost / paper · ${tag}`, money(w && w.costPerPaper)],
+    ];
+  }
+  function renderPeriodSwitch() {
+    for (const b of document.querySelectorAll("#period button")) b.classList.toggle("on", b.dataset.period === period);
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("#period button[data-period]");
+    if (!b || !state.data) return;
+    period = b.dataset.period;
+    try { localStorage.setItem("paperboards.period", period); } catch { /* storage unavailable */ }
+    renderPeriodSwitch();
+    renderTape(state.data);
+  });
+
   function renderTape(d) {
     const t = d.totals, p = d.protocol;
+    renderPeriodSwitch();
     const items = [
-      ["depositors", t.depositors.toLocaleString("en-US")],
-      ["deposited", compact(t.depositedUsdc)],
-      ["withdrawn", compact(t.withdrawnUsdc)],
-      ["balance", compact((d.rows.reduce((s, r) => s + big(r.balance18 ?? "0"), 0n) / 10000000000n).toString())],
+      ["users", (d.crossCheck && d.crossCheck.apiUniqueAccounts ? d.crossCheck.apiUniqueAccounts : t.depositors).toLocaleString("en-US")],
+      ...(d.crossCheck && d.crossCheck.apiTvl18 ? [["tvl", compact((big(d.crossCheck.apiTvl18) / 10000000000n).toString())]] : []),
+      // Sum of every depositor's account value (deposits − withdrawals + pnl + rewards claimed); not TVL.
+      ["user balances", compact((d.rows.reduce((s, r) => s + big(r.balance18 ?? "0"), 0n) / 10000000000n).toString())],
       ...(t.rewardsClaimed18 != null ? [["staking rewards", compact(((big(t.rewardsClaimed18) + big(t.rewardsPending18 ?? "0")) / 10000000000n).toString())]] : []),
       ...(p ? [
         ["paper supply", `${(p.paperSupply / 1e6).toFixed(1)}M`],
         ["staked", pct(p.paperStaked / p.paperSupply, 1)],
-        [`inflation ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.inflation == null ? "–" : `+${pct(p.inflation, 1)}`],
-        [`staker rewards ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.rewards == null ? "–" : `$${(p.rewards / 1e6).toFixed(2)}M`],
-        ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
-        // All-time average net cost per PAPER (−trader pnl ÷ supply); today's cost is the Mint rate panel's.
-        ["avg cost / paper · all-time average", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`],
+        // Period metrics follow the Overview switch (1H / 1D / 7D / 30D / All); a period longer than the minted
+        // history shows the hours it actually covers.
+        ...periodItems(p),
         ...(maxSupply(d.curve) != null ? [
           ["max supply ≈", `${(maxSupply(d.curve) / 1e9).toFixed(2)}B`],
           ["valuation · all-time avg cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
         ] : []),
-        ["reward / paper / yr", p.rewardPerPaperYear == null ? "–" : `$${p.rewardPerPaperYear.toFixed(4)}`],
       ] : d.crossCheck && d.crossCheck.apiTrackedPaper18 ? [["paper", paperAmt(d.crossCheck.apiTrackedPaper18)]] : []),
     ];
     $("tape").innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
@@ -333,30 +362,18 @@
     // D (the curve's decay constant) from the closed-form pieces: remaining / tailEmission = D / T.
     const T = m.tailProgressUsd, D = T > 0 && m.tailEmissionPaper > 0 ? T * m.remainingTailPaper / m.tailEmissionPaper : 120e6;
     const s = m.series, rates = s ? s.ratePerUsd : [], n = rates.length;
-    let ratePerHour = null;
-    if (s && n >= 2) {
-      const lastI = n - 1, back = Math.max(0, lastI - Math.round(3_600_000 / s.intervalMs));
-      let i = back; while (i < lastI && rates[i] == null) i++;
-      if (i < lastI && rates[lastI] != null) ratePerHour = (rates[lastI] - rates[i]) / (((lastI - i) * s.intervalMs) / 3_600_000);
-    }
-    const halfTail = D * (Math.SQRT2 - 1), speed = m.tailSpeedUsdPerHour;
-    const hoursToHalf = speed > 0 && T < halfTail ? (halfTail - T) / speed : null;
+    const speed = m.tailSpeedUsdPerHour, nextHalf = Math.SQRT2 * (D + T) - D;
+    const hoursToNextHalf = speed > 0 ? (nextHalf - T) / speed : null;
     const items = [
       ["rate", `${m.ratePerUsd.toFixed(1)} / $`],
       ...(typeof m.mintCostUsd === "number" ? [["cost to mint now · no hedge", `$${m.mintCostUsd.toFixed(4)}`]] : []),
       ...(typeof m.hedgedMintCostUsd === "number" ? [[`cost to mint now · hedged ±${m.hedgedCostTargetBps} bps`, `$${m.hedgedMintCostUsd.toFixed(4)}`]] : []),
-      ["regime", m.regime === "flat" ? `flat (${m.flatRate})` : `tail · ${pct(1 - m.ratePerUsd / m.flatRate, 0)} below flat`],
-      ["realized losses (tailprogress)", M(T)],
-      ["tracked lp vs cliff", `${M(m.trackedLpUsd)} / ${M(m.cliffUsd)}`],
-      ["losses / h", speed == null ? "–" : M(speed)],
-      ["rate change / h", ratePerHour == null ? "–" : `${ratePerHour >= 0 ? "+" : ""}${ratePerHour.toFixed(1)}`],
-      ["rate halves at", `${M(halfTail)} · ${hrs(hoursToHalf)}`],
-      ["supply → limit", `${B(m.supplyPaper)} → ${B(m.limitSupplyPaper)}`],
-      ["cliff dips seen", `${m.dips ? m.dips.length : 0}`],
+      // The rate halves again once realized losses reach √2·(D + T) − D; time at the recent pace of losses.
+      ["rate halves again at", `${M(nextHalf)} realized · ${hrs(hoursToNextHalf)}`],
       ["payout queue", m.queueUsd > 0 ? M(m.queueUsd) : "empty"],
     ];
     kp.innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-    $("minthint").textContent = `paper per $ of realized loss · docs curve on the live summary · as of ${hourLabel(m.atMs)} · ${m.samples ?? 0} samples`;
+    $("minthint").textContent = `paper per $ of realized loss · as of ${hourLabel(m.atMs)} · ${m.samples ?? 0} samples · shaded = cliff dip (lp below ${M(m.cliffUsd)}, flat ${m.flatRate}/$) · ${m.dips && m.dips.length ? `${m.dips.length} seen` : "none seen yet"}`;
     box.innerHTML = `<figure class="chart"><figcaption><span>Mint rate (10-minute bins)</span><b id="mint-cv"></b></figcaption><svg role="img" aria-label="mint rate over time"></svg></figure>`;
     const figs = box.querySelectorAll(".chart"), H = 132, TOP = 8, BOT = 20, R = 10, L = 34;
     // Chart 1: rate by bin, gaps where nothing was sampled.
@@ -373,6 +390,12 @@
         const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
         svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${t.toFixed(0)}</text>`).join("")
           + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
+          // Cliff dips: tracked LP below the cliff, the curve back at the flat rate. Shaded so they read at a glance.
+          + (m.dips || []).map((dp) => {
+            const i0 = (Date.parse(dp.fromAt) - s.startMs) / s.intervalMs, i1 = dp.toAt ? (Date.parse(dp.toAt) - s.startMs) / s.intervalMs : n - 1;
+            const x0 = x(Math.max(0, i0)), x1 = Math.max(x0 + 3, x(Math.min(n - 1, i1)));
+            return `<rect class="dipband" x="${x0.toFixed(1)}" y="${TOP}" width="${(x1 - x0).toFixed(1)}" height="${H - TOP - BOT}"><title>${esc(`cliff dip ${hourLabel(Date.parse(dp.fromAt))} → ${dp.toAt ? hourLabel(Date.parse(dp.toAt)) : "now"} · lp down to ${M(dp.minLpUsd)} (${M(dp.depthUsd)} below the cliff)`)}</title></rect>`;
+          }).join("")
           + `<path class="line" d="${path}"/><line class="cross" y1="${TOP}" y2="${H - BOT}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
         const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
         const show = (i) => { const at = i == null ? n - 1 : i, v = rates[at];
@@ -492,7 +515,7 @@
     lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
     lines.push(`share: paper ÷ total paper supply · inflation, staked and reward rate: /query/protocol/history (hourly) over the last 24h, or since paper supply was first recorded if that is shorter (the window is shown); early windows give extreme rates`);
     lines.push(`apr (protocol-wide): (staker rewards over that window ÷ mean staked paper, annualized) ÷ cost per paper, where cost per paper = −cumulative trader pnl ÷ paper supply; history charts evaluate the same definitions at every hour`);
-    lines.push(`cost to mint now: no hedge = 1 ÷ (0.98 × rate); hedged = (1 − win ratio) ÷ (0.98 × rate) for a btc long + short pair opened and closed together at ±target bps, win ratio = (move − 0.2 bps) × 0.9 ÷ (1 + 1/(move·15000) + 1e5/(1e6·move·814.6)) × 0.98 ÷ move (docs' impact model) · avg cost / paper = all-time average, −trader pnl ÷ paper supply, not today's cost`);
+    lines.push(`cost to mint now: no hedge = 1 ÷ (0.98 × rate); hedged = (1 − win ratio) ÷ (0.98 × rate) for a btc long + short pair opened and closed together at ±target bps, win ratio = (move − 0.2 bps) × 0.9 ÷ (1 + 1/(move·15000) + 1e5/(1e6·move·814.6)) × 0.98 ÷ move (docs' impact model) · overview period switch (1H / 1D / 7D / 30D / All): inflation = supply growth, staker rewards, reward per staked paper annualized, apr = that ÷ all-time avg cost per paper, avg cost / paper = −Δ trader pnl ÷ Δ supply, all over the trailing period from /query/protocol/history (hourly); a period longer than the minted history shows its real hours · valuation uses the all-time average`);
     lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress) from /query/protocol/summary (further dips of lp below the cliff would mint more) · valuation = cost per paper × max supply`);
     lines.push(`$/paper: acquisition cost per paper = −pnl ÷ paper (realized + unrealized); negative = in profit overall`);
     lines.push(`pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split`);

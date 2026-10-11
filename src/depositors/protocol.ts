@@ -63,6 +63,64 @@ export function protocolStats(h: ProtocolHistory): (ProtocolStats & WindowRates)
   return { asOfMs: h.startMs + last * h.intervalMs, paperSupply: supply[last], paperStaked: staked[last], ...ratesAt(h, last) };
 }
 
+export interface PeriodRates {
+  /** Hours the period actually covers; shorter than asked when PAPER history is younger ("clamped"). */
+  hours: number;
+  clamped: boolean;
+  /** supply(end) / supply(start) - 1. */
+  inflation: number | null;
+  /** USDC to stakers during the period. */
+  rewards: number | null;
+  /** rewards / mean staked PAPER, scaled to a year. */
+  rewardPerPaperYear: number | null;
+  /** rewardPerPaperYear / all-time average cost per PAPER (the cost basis of a held PAPER). */
+  apr: number | null;
+  /** Net cost per PAPER minted in the period: -(change in trader pnl) / (change in supply). */
+  costPerPaper: number | null;
+}
+
+export const PERIODS = { "1h": 1, "1d": 24, "7d": 168, "30d": 720, all: null } as const;
+export type PeriodKey = keyof typeof PERIODS;
+
+/** The overview's period metrics for 1H / 1D / 7D / 30D / all, each over the trailing period ending now. */
+export function periodRates(h: ProtocolHistory): Record<PeriodKey, PeriodRates | null> | null {
+  const supply = h.columns.paperSupply ?? [], staked = h.columns.paperStaked ?? [], rewards = h.columns.stakingRewards ?? [], pnl = h.columns.traderPnl ?? [];
+  const n = Math.min(supply.length, staked.length, rewards.length);
+  if (n === 0 || h.intervalMs <= 0) return null;
+  const last = n - 1;
+  let first = 0;
+  while (first < last && !(supply[first] > 0)) first++;
+  const perHour = 3_600_000 / h.intervalMs;
+  const avgCost = supply[last] > 0 && pnl[last] != null && -pnl[last] > 0 ? -pnl[last] / supply[last] : null;
+  // A period longer than the minted history covers all of it: rewards then include the first minted hour,
+  // and the cost runs from the start of the history so "all" equals the cumulative average (-pnl / supply).
+  const one = (hours: number | null): PeriodRates | null => {
+    const want = hours === null ? Infinity : Math.max(1, Math.round(hours * perHour));
+    const whole = last - want < first;
+    const rateFrom = whole ? first : last - want;
+    const rewFrom = whole ? Math.max(0, first - 1) : rateFrom;
+    const costFrom = whole ? 0 : rateFrom;
+    if (rewFrom >= last) return null;
+    const span = last - rewFrom, spanMs = span * h.intervalMs;
+    let meanStaked = 0, k = 0;
+    for (let i = Math.max(rewFrom, first); i <= last; i++) { meanStaked += staked[i]; k++; }
+    meanStaked = k ? meanStaked / k : 0;
+    const got = rewards[last] - rewards[rewFrom];
+    const ppy = meanStaked > 0 ? (got / meanStaked) * (YEAR_MS / spanMs) : null;
+    const minted = supply[last] - supply[costFrom];
+    return {
+      hours: spanMs / 3_600_000,
+      clamped: hours !== null && whole,
+      inflation: rateFrom < last && supply[rateFrom] > 0 ? supply[last] / supply[rateFrom] - 1 : null,
+      rewards: got,
+      rewardPerPaperYear: ppy,
+      apr: ppy !== null && avgCost ? ppy / avgCost : null,
+      costPerPaper: minted > 0 && pnl[last] != null && pnl[costFrom] != null ? (pnl[costFrom] - pnl[last]) / minted : null,
+    };
+  };
+  return Object.fromEntries(Object.entries(PERIODS).map(([k, v]) => [k, one(v)])) as Record<PeriodKey, PeriodRates | null>;
+}
+
 export interface ProtocolSeries {
   /** Time of the first point (first interval with PAPER supply); points are intervalMs apart. */
   startMs: number;

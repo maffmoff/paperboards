@@ -25,7 +25,11 @@
 
 <main class="board">
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Overview</h2><span class="sub">all depositors</span></div>
+    <div class="panel-head"><h2>Overview</h2>
+      <div class="seg" id="period" role="group" aria-label="Period for inflation, staker rewards, apr and cost">
+        <button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button><button type="button" data-period="7d">7D</button><button type="button" data-period="30d">30D</button><button type="button" data-period="all">All</button>
+      </div>
+      <span class="sub" id="periodhint">period metrics over the trailing period</span></div>
     <div class="kpis" id="tape" aria-live="polite"></div>
   </section>
 
