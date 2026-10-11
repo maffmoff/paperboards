@@ -33,11 +33,8 @@
     const balances = Number(d.rows.reduce((s, r) => s + big(r.balance18), 0n) / 10n ** 12n) / 1e6;
     const max = maxSupply(c);
     const items = [
-      kpi("users", count(cc.apiUniqueAccounts || d.totals.depositors)),
-      kpi("tvl", cc.apiTvl18 ? usd(Number(big(cc.apiTvl18) / 10n ** 12n) / 1e6) : "–", "official protocol treasury value"),
       kpi("user balances", usd(balances), "sum of every depositor's account value (deposits − withdrawals + pnl + rewards claimed); not TVL"),
-      kpi("paper supply", paper(p.paperSupply)),
-      kpi("staked", p.paperSupply ? pct(p.paperStaked / p.paperSupply) : "–"),
+      kpi("staked", p.paperSupply ? pct(p.paperStaked / p.paperSupply) : "–", "share of PAPER supply staked"),
       kpi("max supply ≈", paper(max), "supply + what the tail curve can still mint (no further cliff dips)"),
       kpi("valuation · all-time avg cost × max supply", max != null && p.avgCost != null ? usd(p.avgCost * max) : "–"),
     ];
@@ -45,14 +42,12 @@
       const T = m.tailProgressUsd, D = c && c.decayScale > 0 ? c.decayScale : 120e6, next = Math.SQRT2 * (D + T) - D;
       const hrs = m.tailSpeedUsdPerHour > 0 ? (next - T) / m.tailSpeedUsdPerHour : null;
       items.push(
-        kpi("mint rate", `${m.ratePerUsd.toFixed(1)} / $`, "PAPER per $1 of realized loss right now"),
         kpi("cost to mint now · no hedge", unit(m.mintCostUsd)),
         kpi(`cost to mint now · hedged ±${m.hedgedCostTargetBps ?? 15} bps`, unit(m.hedgedMintCostUsd)),
         kpi("rate halves again at", `${usd(next)} realized${hrs != null ? ` · ${hrs < 48 ? `${hrs.toFixed(1)} h` : `${(hrs / 24).toFixed(1)} d`}` : ""}`, "time at the recent pace of realized losses"),
         kpi("payout queue", m.queueUsd > 0 ? usd(m.queueUsd) : "empty"),
       );
     }
-    if (c) items.push(kpi("staker share now", `${stakerShare(c.currentLp, c)}%`, `of realized losses, at lp ${usd(c.currentLp)} (99% from ${usd(c.stakerCap)})`));
     $("now").innerHTML = items.join("");
   }
 
@@ -62,55 +57,52 @@
   try { const v = localStorage.getItem("paperboards.period"); if (PERIODS.some(([k]) => k === v)) period = v; } catch { /* storage unavailable */ }
 
   function renderActivity(d) {
-    const p = d.protocol || {}, f = p.flows && p.flows[period], a = p.periods && p.periods[period];
+    const p = d.protocol || {}, f = p.flows && p.flows[period], a = p.periods && p.periods[period], m = p.market;
     const [, name, hours] = PERIODS.find(([k]) => k === period);
     for (const b of document.querySelectorAll("#period button")) b.classList.toggle("on", b.dataset.period === period);
     const tag = (w) => `${name}${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
-    $("activity-totals").innerHTML = [
-      kpi(`volume · ${tag(f)}`, f ? usd(f.volume) : "–"),
-      kpi(`trades · ${tag(f)}`, f ? count(f.trades) : "–"),
-      kpi(`trader pnl · ${tag(f)}`, f ? signedUsd(f.pnlChange) : "–", "change in cumulative trader pnl; negative = traders lost"),
-      kpi(`staker rewards · ${tag(f)}`, f ? usd(f.rewards) : "–"),
-      kpi(`paper minted · ${tag(f)}`, f ? paper(f.paperMinted) : "–"),
-      kpi(`new users · ${tag(f)}`, f ? count(f.newUsers) : "–"),
-    ].join("");
-    $("activity-avg").innerHTML = [
-      kpi(`inflation · ${tag(a)}`, a && a.inflation != null ? `+${pct(a.inflation, a.inflation < 0.01 ? 2 : 1)}` : "–", "growth of PAPER supply over the period"),
-      kpi(`apr · ${tag(a)}`, a && a.apr != null ? pct(a.apr, 0) : "–", "staker rewards per staked PAPER over the period, annualized, ÷ all-time average cost per PAPER"),
-      kpi(`avg cost / paper · ${tag(a)}`, unit(a && a.costPerPaper), "net trader loss per PAPER minted over the period (−Δ pnl ÷ Δ supply)"),
-    ].join("");
-    renderActivityCharts(d, hours);
-  }
-
-  // Hourly histories over the selected period (at least the last 24 h, since the data is hourly).
-  function renderActivityCharts(d, hours) {
-    const box = $("activity-charts"), m = d.protocol && d.protocol.market;
-    if (!m || m.tvl.length < 2) { box.innerHTML = `<p class="empty">not enough history yet</p>`; return; }
-    const n = m.tvl.length, keep = hours == null ? n : Math.min(n, Math.max(24, hours) + 1), from = n - keep;
-    const t = (i) => m.startMs + i * m.intervalMs;
-    const pts = (arr) => arr.slice(from).map((v, i) => [t(from + i), v]);
-    const charts = [
-      ["Volume per hour", pts(m.volumePerInterval), usd, true],
-      ["Trader PnL per hour", pts(m.pnlPerInterval), signedUsd, true],
-      ["Staker rewards per hour", pts(m.rewardsPerInterval), usd, true],
-      ["PAPER minted per hour", pts(m.paperMintedPerInterval), paper, true],
-      ["TVL", pts(m.tvl), usd],
-      ["Users", pts(m.users), count],
-      ["PAPER supply", pts(m.paperSupply), paper],
-    ];
-    const ms = d.mint && d.mint.series;
-    if (ms && ms.ratePerUsd && ms.ratePerUsd.length) {
-      const t0 = t(from);
-      const rate = ms.ratePerUsd.map((v, i) => [ms.startMs + i * ms.intervalMs, v]).filter(([x]) => x >= t0);
-      const bands = (d.mint.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
-      charts.push(["Mint rate (PAPER per $; shaded = cliff dip)", rate, (v) => `${v.toFixed(1)}/$`, false, bands]);
+    const box = $("activity-rows");
+    // History window: the selected period, at least the last 24 h since the data is hourly.
+    let pts = () => [], t0 = 0;
+    if (m && m.tvl.length >= 2) {
+      const n = m.tvl.length, keep = hours == null ? n : Math.min(n, Math.max(24, hours) + 1), from = n - keep;
+      const t = (i) => m.startMs + i * m.intervalMs;
+      t0 = t(from);
+      pts = (arr) => arr.slice(from).map((v, i) => [t(from + i), v]);
     }
-    box.innerHTML = charts.map(([title]) => `<figure class="chart"><figcaption><span>${esc(title)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(title)}"></svg></figure>`).join("");
-    const figs = box.querySelectorAll(".chart"), draws = [];
-    const base = `hourly · ${hours == null ? "since genesis" : hours < 24 ? "last 24 h" : `last ${hours >= 168 ? `${hours / 24} days` : `${hours} h`}`} · hover to read every chart at that time`;
+    const ms = d.mint && d.mint.series;
+    const mintPts = ms && ms.ratePerUsd ? ms.ratePerUsd.map((v, i) => [ms.startMs + i * ms.intervalMs, v]).filter(([x]) => x >= t0) : [];
+    const dips = (d.mint && d.mint.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
+    const last = (arr) => (arr && arr.length ? arr[arr.length - 1] : null);
+    // [label, value, title, chart points, formatter, bars, bands]
+    // One row per quantity; figures derived from the same numbers share its row instead of repeating it.
+    const apr = a && a.apr != null ? `apr ${pct(a.apr, 0)}` : null;
+    const cost = a && a.costPerPaper != null ? `${unit(a.costPerPaper)} per paper minted` : null;
+    const growth = f ? `+${paper(f.paperMinted)}${a && a.inflation != null ? ` (+${pct(a.inflation, a.inflation < 0.01 ? 2 : 1)})` : ""} · ${tag(f)}` : null;
+    const join = (...xs) => xs.filter(Boolean).join(" · ");
+    // [label, value, sub-value, title, chart points, formatter, bars, bands]
+    const rows = [
+      [`volume · ${tag(f)}`, f ? usd(f.volume) : "–", null, "total traded over the period; bars = per hour", m && pts(m.volumePerInterval), usd, true],
+      [`trades · ${tag(f)}`, f ? count(f.trades) : "–", null, "trades over the period; bars = per hour", m && pts(m.tradesPerInterval), count, true],
+      [`trader pnl · ${tag(f)}`, f ? signedUsd(f.pnlChange) : "–", cost, "change in cumulative trader pnl (negative = traders lost) and the net loss per PAPER minted in the period; bars = per hour", m && pts(m.pnlPerInterval), signedUsd, true],
+      [`staker rewards · ${tag(f)}`, f ? usd(f.rewards) : "–", apr, "USDC paid to stakers over the period; apr = per staked PAPER, annualized, ÷ all-time average cost per PAPER; bars = per hour", m && pts(m.rewardsPerInterval), usd, true],
+      ["tvl", d.crossCheck && d.crossCheck.apiTvl18 ? usd(Number(BigInt(d.crossCheck.apiTvl18) / 10n ** 12n) / 1e6) : usd(m && last(m.tvl)), null, "official protocol treasury value", m && pts(m.tvl), usd],
+      ["users", count((d.crossCheck && d.crossCheck.apiUniqueAccounts) || (m && last(m.users))), f ? `+${count(f.newUsers)} · ${tag(f)}` : null, "accounts now and added over the period", m && pts(m.users), count],
+      ["paper supply", paper(p.paperSupply), growth, "PAPER now, minted over the period and the growth that is (inflation)", m && pts(m.paperSupply), paper],
+      ["mint rate", d.mint && typeof d.mint.ratePerUsd === "number" ? `${d.mint.ratePerUsd.toFixed(1)} / $` : "–", null, "PAPER per $1 of realized loss now; shaded = cliff dip (lp below the mint-decay threshold)", mintPts, (v) => `${v.toFixed(1)}/$`, false, dips],
+    ];
+    box.innerHTML = rows.map(([label, value, sub, title, points], i) => `<div class="mrow${points ? "" : " nochart"}"${title ? ` title="${esc(title)}"` : ""}>
+      <div class="mhead"><span>${esc(label)}</span><b>${esc(value)}</b>${sub ? `<em>${esc(sub)}</em>` : ""}</div>
+      ${points ? `<figure class="chart" data-i="${i}"><figcaption><span></span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(label)} history"></svg></figure>` : ""}
+    </div>`).join("");
+    const base = `hourly · ${hours == null ? "since genesis" : hours < 24 ? "last 24 h" : `last ${hours >= 168 ? `${hours / 24} days` : `${hours} h`}`} · hover a chart to read every row at that time`;
     $("activityhint").textContent = base;
-    const hover = (ms) => { draws.forEach((g) => g(ms)); $("activityhint").textContent = ms == null ? base : hourLabel(ms); };
-    charts.forEach(([, points, fmt, bars, bands], i) => draws.push(timeChart(figs[i], points, fmt, hover, { bars, bands })));
+    const draws = [];
+    const hover = (msAt) => { draws.forEach((g) => g(msAt)); $("activityhint").textContent = msAt == null ? base : hourLabel(msAt); };
+    rows.forEach(([, , , , points, fmt, bars, bands], i) => {
+      if (!points) return;
+      draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, bands }));
+    });
   }
 
   // A time-scaled chart: line (levels) or bars (per-hour flows), optional shaded bands, shared hover by time.
