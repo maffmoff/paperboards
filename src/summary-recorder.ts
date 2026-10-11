@@ -250,6 +250,27 @@ export function curveAt(r: SummaryRecord): { tailEmissionPaper: number; remainin
   return { tailEmissionPaper: tailEmission, remainingTailPaper: remaining, limitSupplyPaper: r.supplyPaper + remaining, flatEmissionPaper: r.supplyPaper - tailEmission };
 }
 
+/**
+ * Win payout ÷ loss for a hedged pair whose two legs open and close at the same prices, from the docs'
+ * asymmetric price impact: 0.2 bps deadband, scale = 0.9 / (1 + 1/(move·15000) + 1e5/(1e6·move·posMult)),
+ * 2 % fee on the win. The losing leg pays the full move. posMult: BTC 814.598, ETH 483.979.
+ */
+export function hedgedWinRatio(moveBps: number, posMult = 814.598): number {
+  const move = moveBps / 1e4;
+  if (!(move > 0)) return 0;
+  const net = Math.max(0, move - 1 / 50_000);
+  const scale = net > 0 ? 0.9 / (1 + 1 / (net * 15_000) + 100_000 / (1e6 * net * posMult)) : 0;
+  return (net * scale * 0.98) / move;
+}
+
+/** USD of net loss per PAPER for a pair closed at ±moveBps: (1 − winRatio) ÷ (0.98 · rate); 0.98 = the losing leg's mint basis. */
+export function hedgedCostPerPaper(ratePerUsd: number, moveBps: number, posMult?: number): number {
+  return ratePerUsd > 0 ? (1 - hedgedWinRatio(moveBps, posMult)) / (0.98 * ratePerUsd) : 0;
+}
+
+/** The ±move the site quotes the hedged cost at. */
+export const HEDGED_COST_TARGET_BPS = 15;
+
 export interface MintHeadline {
   block: number;
   atMs: number;
@@ -267,6 +288,12 @@ export interface MintHeadline {
   remainingTailPaper: number;
   limitSupplyPaper: number;
   flatEmissionPaper: number;
+  /** USD lost per PAPER minted right now with no hedge: 1 ÷ (0.98 · rate). */
+  mintCostUsd: number;
+  /** USD of net loss per PAPER for a BTC long + short pair closed at ±HEDGED_COST_TARGET_BPS. */
+  hedgedMintCostUsd: number;
+  hedgedCostTargetBps: number;
+  hedgedWinRatio: number;
 }
 
 export function mintHeadline(r: SummaryRecord): MintHeadline {
@@ -274,6 +301,10 @@ export function mintHeadline(r: SummaryRecord): MintHeadline {
     block: r.block, atMs: Date.parse(r.at), regime: r.regime, ratePerUsd: r.ratePerUsd, flatRate: r.flatRate,
     trackedLpUsd: r.trackedLpUsd, tailProgressUsd: r.tailProgressUsd, cliffUsd: r.cliffUsd, capUsd: r.capUsd, decayUsd: r.decayUsd, queueUsd: r.queueUsd,
     supplyPaper: r.supplyPaper, ...curveAt(r),
+    mintCostUsd: r.ratePerUsd > 0 ? 1 / (0.98 * r.ratePerUsd) : 0,
+    hedgedMintCostUsd: hedgedCostPerPaper(r.ratePerUsd, HEDGED_COST_TARGET_BPS),
+    hedgedCostTargetBps: HEDGED_COST_TARGET_BPS,
+    hedgedWinRatio: hedgedWinRatio(HEDGED_COST_TARGET_BPS),
   };
 }
 
