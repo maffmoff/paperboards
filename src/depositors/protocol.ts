@@ -222,6 +222,12 @@ export interface MarketSeries {
   stakingRewards: number[];
   users: number[];
   traderPnl: number[];
+  paperSupply: number[];
+  /** Per-interval differences of the cumulative columns (null for the first point). */
+  rewardsPerInterval: (number | null)[];
+  pnlPerInterval: (number | null)[];
+  paperMintedPerInterval: (number | null)[];
+  newUsersPerInterval: (number | null)[];
 }
 
 export function marketSeries(h: ProtocolHistory): MarketSeries | null {
@@ -238,5 +244,49 @@ export function marketSeries(h: ProtocolHistory): MarketSeries | null {
     stakingRewards: col("stakingRewards"),
     users: col("users"),
     traderPnl: col("traderPnl"),
+    paperSupply: col("paperSupply"),
+    rewardsPerInterval: diff(col("stakingRewards")),
+    pnlPerInterval: diff(col("traderPnl")),
+    paperMintedPerInterval: diff(col("paperSupply")),
+    newUsersPerInterval: diff(col("users")),
   };
+}
+
+/** Totals over a trailing period: what happened in it (sums of the per-interval flows). */
+export interface PeriodFlows {
+  /** Hours covered; shorter than asked when the history is younger ("clamped"). */
+  hours: number;
+  clamped: boolean;
+  volume: number;
+  trades: number;
+  /** Change in cumulative trader pnl: negative = traders lost money over the period. */
+  pnlChange: number;
+  rewards: number;
+  paperMinted: number;
+  newUsers: number;
+}
+
+/** 1H / 1D / 7D / 30D / all flows from the hourly history, counted from the start of the history (genesis). */
+export function periodFlows(h: ProtocolHistory): Record<PeriodKey, PeriodFlows | null> | null {
+  const c = h.columns, n = (c.volume ?? []).length;
+  if (n < 2 || h.intervalMs <= 0) return null;
+  const last = n - 1, perHour = 3_600_000 / h.intervalMs;
+  const at = (k: string, i: number) => { const v = (c[k] ?? [])[i]; return Number.isFinite(v) ? v : 0; };
+  const d = (k: string, from: number) => at(k, last) - at(k, from);
+  const one = (hours: number | null): PeriodFlows | null => {
+    const want = hours === null ? last : Math.max(1, Math.round(hours * perHour));
+    const from = Math.max(0, last - want);
+    if (from >= last) return null;
+    return {
+      hours: ((last - from) * h.intervalMs) / 3_600_000,
+      clamped: hours !== null && last - want < 0,
+      volume: d("volume", from),
+      trades: d("trades", from),
+      pnlChange: d("traderPnl", from),
+      rewards: d("stakingRewards", from),
+      paperMinted: d("paperSupply", from),
+      newUsers: d("users", from),
+    };
+  };
+  return Object.fromEntries(Object.entries(PERIODS).map(([k, v]) => [k, one(v)])) as Record<PeriodKey, PeriodFlows | null>;
 }

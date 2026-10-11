@@ -26,33 +26,27 @@
 
 <main class="board">
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Overview</h2>
-      <div class="seg" id="period" role="group" aria-label="Period for inflation, staker rewards, apr and cost">
+    <div class="panel-head"><h2>Now</h2><span class="sub">the state at this moment</span></div>
+    <div class="kpis" id="now"></div>
+  </section>
+
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>Activity</h2>
+      <div class="seg" id="period" role="group" aria-label="Period">
         <button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button><button type="button" data-period="7d">7D</button><button type="button" data-period="30d">30D</button><button type="button" data-period="all">All</button>
       </div>
-      <span class="sub" id="periodhint">period metrics over the trailing period</span></div>
-    <div class="kpis" id="tape" aria-live="polite"></div>
+      <span class="sub" id="activityhint"></span></div>
+    <div class="subhead">totals over the period</div>
+    <div class="kpis" id="activity-totals"></div>
+    <div class="subhead">averaged over the period</div>
+    <div class="kpis kpis-3" id="activity-avg"></div>
+    <div class="charts" id="activity-charts"></div>
   </section>
 
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Mint rate</h2><span class="sub" id="minthint">paper per $ of realized loss · docs curve on the live summary</span></div>
-    <div class="kpis" id="mintkpis"></div>
-    <div class="charts charts-2" id="mintcharts"></div>
-  </section>
-
-  <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Curves</h2><span class="sub" id="curvehint">the protocol's fixed rules, drawn over their whole range · hover to read</span></div>
-    <div class="charts charts-2" id="curves"></div>
-  </section>
-
-  <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>History</h2><span class="sub" id="histhint">hourly · hover a chart to read every metric at that hour</span></div>
-    <div class="charts" id="charts"></div>
-  </section>
-
-  <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Protocol</h2><span class="sub" id="markethint">hourly since genesis · hover a chart to read every metric at that hour</span></div>
-    <div class="charts" id="market"></div>
+    <div class="panel-head"><h2>Rules</h2><span class="sub">fixed protocol parameters and the curves they define · hover to read</span></div>
+    <div class="kpis kpis-5" id="rules-params"></div>
+    <div class="charts charts-2" id="rules-curves"></div>
   </section>
 
   <section class="panel" data-page="leaderboard">
@@ -109,6 +103,7 @@
     <footer class="foot" id="meta"></footer>
   </section>
 </main>
+<script src="stats.js"></script>
 <script src="app.js"></script>
 <script src="card.js"></script>
 <script src="ask.js"></script>

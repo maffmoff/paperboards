@@ -26,7 +26,7 @@ import {
   type RawLog,
 } from "./events.js";
 import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "./rank.js";
-import { curveParams, marketSeries, periodRates, protocolSeries, protocolStats, type CurveParams, type ProtocolHistory } from "./protocol.js";
+import { curveParams, marketSeries, periodFlows, periodRates, protocolSeries, protocolStats, type CurveParams, type ProtocolHistory } from "./protocol.js";
 import { costWindows } from "./cost-windows.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
 import { logLine } from "../logging.js";
@@ -234,7 +234,7 @@ async function fetchProtocolStats() {
     if (!res.ok) return null;
     const h = (await res.json()) as ProtocolHistory;
     const stats = protocolStats(h);
-    return stats && { ...stats, series: protocolSeries(h), costWindows: costWindows(h), periods: periodRates(h), market: marketSeries(h) };
+    return stats && { ...stats, series: protocolSeries(h), costWindows: costWindows(h), periods: periodRates(h), market: marketSeries(h), flows: periodFlows(h) };
   } catch (e) {
     console.error(`protocol history unavailable: ${(e as Error).message}`);
     return null;

@@ -130,68 +130,6 @@
   const txLink = (tx, label) => (tx ? `<a class="tx" href="${state.data.explorer}/tx/${tx}" target="_blank" rel="noopener" title="${tx}">${label}</a>` : label);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // Approximate maximum PAPER supply: what exists now plus what the tail curve can still mint,
-  // flat * D^2 / (D + tailProgress). Further dips of LP below the cliff (flat-rate minting) are not included.
-  function maxSupply(c) {
-    if (!c || !(c.decayScale > 0) || !(c.flatRate > 0)) return null;
-    return c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress);
-  }
-
-  const PERIOD_NAMES = { "1h": "1H", "1d": "1D", "7d": "7D", "30d": "30D", all: "all time" };
-  let period = "1d";
-  try { const v = localStorage.getItem("paperboards.period"); if (v in PERIOD_NAMES) period = v; } catch { /* storage unavailable */ }
-  function periodItems(p) {
-    const w = p.periods && p.periods[period];
-    if (!p.periods) {
-      // Older data without per-period figures: the single trailing window.
-      return [["inflation", p.inflation == null ? "–" : `+${pct(p.inflation, 1)}`], ["staker rewards", p.rewards == null ? "–" : usdShort(p.rewards)], ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
-        ["reward / paper / yr", p.rewardPerPaperYear == null ? "–" : `$${p.rewardPerPaperYear.toFixed(4)}`], ["avg cost / paper · all-time average", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`]];
-    }
-    const tag = `${PERIOD_NAMES[period]}${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
-    const money = (v) => (v == null ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(4)}`);
-    return [
-      [`inflation · ${tag}`, !w || w.inflation == null ? "–" : `+${pct(w.inflation, w.inflation < 0.01 ? 2 : 1)}`],
-      [`staker rewards · ${tag}`, !w || w.rewards == null ? "–" : usdShort(w.rewards)],
-      [`apr · ${tag}`, !w || w.apr == null ? "–" : pct(w.apr, 0)],
-      [`avg cost / paper · ${tag}`, money(w && w.costPerPaper)],
-    ];
-  }
-  function renderPeriodSwitch() {
-    for (const b of document.querySelectorAll("#period button")) b.classList.toggle("on", b.dataset.period === period);
-  }
-  document.addEventListener("click", (e) => {
-    const b = e.target.closest("#period button[data-period]");
-    if (!b || !state.data) return;
-    period = b.dataset.period;
-    try { localStorage.setItem("paperboards.period", period); } catch { /* storage unavailable */ }
-    renderPeriodSwitch();
-    renderTape(state.data);
-  });
-
-  function renderTape(d) {
-    const t = d.totals, p = d.protocol;
-    renderPeriodSwitch();
-    const items = [
-      ["users", (d.crossCheck && d.crossCheck.apiUniqueAccounts ? d.crossCheck.apiUniqueAccounts : t.depositors).toLocaleString("en-US")],
-      ...(d.crossCheck && d.crossCheck.apiTvl18 ? [["tvl", compact((big(d.crossCheck.apiTvl18) / 10000000000n).toString())]] : []),
-      // Sum of every depositor's account value (deposits − withdrawals + pnl + rewards claimed); not TVL.
-      ["user balances", compact((d.rows.reduce((s, r) => s + big(r.balance18 ?? "0"), 0n) / 10000000000n).toString())],
-      ...(t.rewardsClaimed18 != null ? [["staking rewards", compact(((big(t.rewardsClaimed18) + big(t.rewardsPending18 ?? "0")) / 10000000000n).toString())]] : []),
-      ...(p ? [
-        ["paper supply", `${(p.paperSupply / 1e6).toFixed(1)}M`],
-        ["staked", pct(p.paperStaked / p.paperSupply, 1)],
-        // Period metrics follow the Overview switch (1H / 1D / 7D / 30D / All); a period longer than the minted
-        // history shows the hours it actually covers.
-        ...periodItems(p),
-        ...(maxSupply(d.curve) != null ? [
-          ["max supply ≈", `${(maxSupply(d.curve) / 1e9).toFixed(2)}B`],
-          ["valuation · all-time avg cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
-        ] : []),
-      ] : d.crossCheck && d.crossCheck.apiTrackedPaper18 ? [["paper", paperAmt(d.crossCheck.apiTrackedPaper18)]] : []),
-    ];
-    $("tape").innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-  }
-
   function entities() {
     const groups = new Map();
     for (const r of state.data.rows) {
@@ -278,267 +216,9 @@
     $("next").disabled = state.page >= pages - 1;
   }
 
-  // History: one single-series line chart per metric, sharing a crosshair (hover any chart).
-  const CHARTS = [
-    { key: "apr", title: "APR (protocol-wide)", fmt: (v) => pct(v, 0) },
-    { key: "avgCost", title: "Cost per PAPER (all traders)", fmt: (v) => `$${v.toFixed(4)}` },
-    { key: "supply", title: "PAPER supply", fmt: (v) => `${(v / 1e6).toFixed(1)}M` },
-    { key: "stakedPct", title: "Staked share of supply", fmt: (v) => pct(v, 1) },
-    { key: "inflationPerInterval", title: "Inflation per hour", fmt: (v) => `+${pct(v, 2)}` },
-    { key: "rewardsPerInterval", title: "Staker rewards per hour", fmt: (v) => (v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : `$${(v / 1e3).toFixed(0)}K`) },
-  ];
   const hourLabel = (ms) => new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-
-  function renderHistory(d) {
-    const s = d.protocol && d.protocol.series;
-    const box = $("charts");
-    if (!s || s.supply.length < 2) { box.innerHTML = `<p class="empty">not enough history yet</p>`; return; }
-    const n = s.supply.length;
-    const timeAt = (i) => s.startMs + i * s.intervalMs;
-    box.innerHTML = CHARTS.map((c) => `<figure class="chart" data-key="${c.key}">
-      <figcaption><span>${esc(c.title)}</span><b class="cv"></b></figcaption>
-      <svg role="img" aria-label="${esc(c.title)} by hour"></svg>
-    </figure>`).join("");
-    const draws = [];
-    for (const fig of box.querySelectorAll(".chart")) {
-      const c = CHARTS.find((x) => x.key === fig.dataset.key);
-      const vals = s[c.key];
-      const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv");
-      const nums = vals.filter((v) => v != null && Number.isFinite(v));
-      if (!nums.length) { cv.textContent = "–"; continue; }
-      let lo = Math.min(...nums), hi = Math.max(...nums);
-      if (lo === hi) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1; }
-      const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-      // Left gutter fits the widest tick label (~5.6px per char at 9.5px).
-      const tickText = [lo + pad, (lo + hi) / 2, hi - pad].map((t) => c.fmt(t));
-      const W = Math.max(200, fig.clientWidth), H = 132, L = Math.ceil(Math.max(...tickText.map((t) => t.length)) * 5.6) + 10, R = 10, T = 8, B = 20;
-      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-      svg.setAttribute("width", W);
-      svg.setAttribute("height", H);
-      const x = (i) => L + (n === 1 ? 0 : (i / (n - 1)) * (W - L - R));
-      const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-      let path = "", pen = false;
-      vals.forEach((v, i) => {
-        if (v == null || !Number.isFinite(v)) { pen = false; return; }
-        path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
-        pen = true;
-      });
-      const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
-      svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(c.fmt(t))}</text>`).join("")
-        + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
-        + `<path class="line" d="${path}"/>`
-        + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/>`
-        + `<rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
-      const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot");
-      const show = (i) => {
-        const at = i == null ? n - 1 : i;
-        const v = vals[at];
-        cv.textContent = v == null || !Number.isFinite(v) ? "–" : c.fmt(v);
-        if (i == null || v == null || !Number.isFinite(v)) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
-        cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-        dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
-      };
-      draws.push(show);
-      const hit = svg.querySelector(".hit");
-      hit.addEventListener("mousemove", (e) => {
-        const r = svg.getBoundingClientRect();
-        const px = ((e.clientX - r.left) / r.width) * W;
-        const i = Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))));
-        draws.forEach((f) => f(i));
-        $("histhint").textContent = hourLabel(timeAt(i));
-      });
-      hit.addEventListener("mouseleave", () => { draws.forEach((f) => f(null)); $("histhint").textContent = "hourly · hover a chart to read every metric at that hour"; });
-      show(null);
-    }
-  }
-  // Mint rate: the docs curve r = flat·(D/(D+P))² on the latest /query/protocol/summary sample (data/summary.jsonl via
-  // src/summary-recorder.ts), with the binned samples as the curve's only history.
-  function renderMint(d) {
-    const m = d.mint, kp = $("mintkpis"), box = $("mintcharts");
-    if (!m || typeof m.ratePerUsd !== "number") { kp.innerHTML = `<div class="kpi"><span>mint rate</span><b>–</b></div>`; box.innerHTML = ""; $("minthint").textContent = "no summary samples yet"; return; }
-    const M = (v) => `$${(v / 1e6).toFixed(1)}M`, B = (v) => `${(v / 1e9).toFixed(2)}B`;
-    const hrs = (h) => (h == null || !Number.isFinite(h) ? "–" : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${h.toFixed(1)} h` : `${(h / 24).toFixed(1)} d`);
-    // D (the curve's decay constant) from the closed-form pieces: remaining / tailEmission = D / T.
-    const T = m.tailProgressUsd, D = T > 0 && m.tailEmissionPaper > 0 ? T * m.remainingTailPaper / m.tailEmissionPaper : 120e6;
-    const s = m.series, rates = s ? s.ratePerUsd : [], n = rates.length;
-    const speed = m.tailSpeedUsdPerHour, nextHalf = Math.SQRT2 * (D + T) - D;
-    const hoursToNextHalf = speed > 0 ? (nextHalf - T) / speed : null;
-    const items = [
-      ["rate", `${m.ratePerUsd.toFixed(1)} / $`],
-      ...(typeof m.mintCostUsd === "number" ? [["cost to mint now · no hedge", `$${m.mintCostUsd.toFixed(4)}`]] : []),
-      ...(typeof m.hedgedMintCostUsd === "number" ? [[`cost to mint now · hedged ±${m.hedgedCostTargetBps} bps`, `$${m.hedgedMintCostUsd.toFixed(4)}`]] : []),
-      // The rate halves again once realized losses reach √2·(D + T) − D; time at the recent pace of losses.
-      ["rate halves again at", `${M(nextHalf)} realized · ${hrs(hoursToNextHalf)}`],
-      ["payout queue", m.queueUsd > 0 ? M(m.queueUsd) : "empty"],
-    ];
-    kp.innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-    $("minthint").textContent = `paper per $ of realized loss · as of ${hourLabel(m.atMs)} · ${m.samples ?? 0} samples · shaded = cliff dip (lp below ${M(m.cliffUsd)}, flat ${m.flatRate}/$) · ${m.dips && m.dips.length ? `${m.dips.length} seen` : "none seen yet"}`;
-    box.innerHTML = `<figure class="chart"><figcaption><span>Mint rate (10-minute bins)</span><b id="mint-cv"></b></figcaption><svg role="img" aria-label="mint rate over time"></svg></figure>`;
-    const figs = box.querySelectorAll(".chart"), H = 132, TOP = 8, BOT = 20, R = 10, L = 34;
-    // Chart 1: rate by bin, gaps where nothing was sampled.
-    {
-      const fig = figs[0], svg = fig.querySelector("svg"), cv = $("mint-cv");
-      const nums = rates.filter((v) => v != null);
-      if (s && nums.length >= 2) {
-        const W = Math.max(200, fig.clientWidth), timeAt = (i) => s.startMs + i * s.intervalMs;
-        let lo = Math.min(...nums), hi = Math.max(...nums); if (lo === hi) { lo -= 1; hi += 1; } const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-        svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-        const x = (i) => L + (n === 1 ? 0 : (i / (n - 1)) * (W - L - R)), y = (v) => TOP + (1 - (v - lo) / (hi - lo)) * (H - TOP - BOT);
-        let path = "", pen = false;
-        rates.forEach((v, i) => { if (v == null) { pen = false; return; } path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
-        const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
-        svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${t.toFixed(0)}</text>`).join("")
-          + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
-          // Cliff dips: tracked LP below the cliff, the curve back at the flat rate. Shaded so they read at a glance.
-          + (m.dips || []).map((dp) => {
-            const i0 = (Date.parse(dp.fromAt) - s.startMs) / s.intervalMs, i1 = dp.toAt ? (Date.parse(dp.toAt) - s.startMs) / s.intervalMs : n - 1;
-            const x0 = x(Math.max(0, i0)), x1 = Math.max(x0 + 3, x(Math.min(n - 1, i1)));
-            return `<rect class="dipband" x="${x0.toFixed(1)}" y="${TOP}" width="${(x1 - x0).toFixed(1)}" height="${H - TOP - BOT}"><title>${esc(`cliff dip ${hourLabel(Date.parse(dp.fromAt))} → ${dp.toAt ? hourLabel(Date.parse(dp.toAt)) : "now"} · lp down to ${M(dp.minLpUsd)} (${M(dp.depthUsd)} below the cliff)`)}</title></rect>`;
-          }).join("")
-          + `<path class="line" d="${path}"/><line class="cross" y1="${TOP}" y2="${H - BOT}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
-        const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-        const show = (i) => { const at = i == null ? n - 1 : i, v = rates[at];
-          cv.textContent = v == null ? "–" : i == null ? v.toFixed(1) : `${v.toFixed(1)} · ${hourLabel(timeAt(i))}`;
-          if (i == null || v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
-          cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible"); dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible"); };
-        hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; show(Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))))); });
-        hit.addEventListener("mouseleave", () => show(null));
-        show(null);
-      } else { cv.textContent = `${m.ratePerUsd.toFixed(1)} · not enough samples for a chart`; }
-    }
-  }
-
-  // One hourly line chart (index-spaced points) with a crosshair; returns the function that shows point i.
-  function seriesChart(fig, vals, timeAt, fmt, onHover) {
-    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv"), n = vals.length;
-    const nums = vals.filter((v) => v != null && Number.isFinite(v));
-    if (nums.length < 2) { cv.textContent = nums.length ? fmt(nums[nums.length - 1]) : "–"; return () => {}; }
-    let lo = Math.min(0, ...nums), hi = Math.max(...nums);
-    if (lo === hi) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1; }
-    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-    const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
-    const W = Math.max(200, fig.clientWidth), H = 132, L = Math.ceil(Math.max(...ticks.map((t) => fmt(t).length)) * 5.6) + 10, R = 10, T = 8, B = 20;
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-    const x = (i) => L + (i / (n - 1)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-    let path = "", pen = false;
-    vals.forEach((v, i) => { if (v == null || !Number.isFinite(v)) { pen = false; return; } path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
-    svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(fmt(t))}</text>`).join("")
-      + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
-      + `<path class="line" d="${path}"/><line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
-    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-    const show = (i) => {
-      const at = i == null ? n - 1 : i, v = vals[at];
-      cv.textContent = v == null || !Number.isFinite(v) ? "–" : fmt(v);
-      if (i == null || v == null || !Number.isFinite(v)) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
-      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-      dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
-    };
-    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; onHover(Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))))); });
-    hit.addEventListener("mouseleave", () => onHover(null));
-    show(null);
-    return show;
-  }
-
-  // Protocol activity since genesis, hourly: TVL, volume and trades per hour, cumulative staker rewards,
-  // users and cumulative trader pnl (protocol.market from /query/protocol/history).
-  function renderMarket(d) {
-    const m = d.protocol && d.protocol.market, box = $("market");
-    if (!m || m.tvl.length < 2) { box.innerHTML = `<p class="empty">not enough history yet</p>`; return; }
-    const charts = [
-      ["tvl", "TVL", usdShort],
-      ["volumePerInterval", "Volume per hour", usdShort],
-      ["stakingRewards", "Staker rewards, cumulative", usdShort],
-      ["users", "Users", (v) => Math.round(v).toLocaleString("en-US")],
-      ["traderPnl", "Trader PnL, cumulative", usdShort],
-      ["tradesPerInterval", "Trades per hour", (v) => Math.round(v).toLocaleString("en-US")],
-    ];
-    box.innerHTML = charts.map(([k, t]) => `<figure class="chart" data-k="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)} by hour"></svg></figure>`).join("");
-    const timeAt = (i) => m.startMs + i * m.intervalMs, draws = [];
-    const base = "hourly since genesis · hover a chart to read every metric at that hour";
-    const hover = (i) => { draws.forEach((g) => g(i)); $("markethint").textContent = i == null ? base : hourLabel(timeAt(i)); };
-    for (const [k, , fmt] of charts) draws.push(seriesChart(box.querySelector(`[data-k="${k}"]`), m[k], timeAt, fmt, hover));
-  }
-
-  // Curves: the rules that turn LP balance and realized losses into PAPER and staker revenue,
-  // drawn over their whole range from /query/protocol/summary (definitions as in the official
-  // frontend's reward-curve chart and reward-rate tiers; src/depositors/protocol.ts).
-  const curveRate = (lp, c) => {
-    if (lp < c.threshold) return c.flatRate;
-    if (c.decayScale <= 0) return 0;
-    const r = c.decayScale / (c.decayScale + c.tailProgress + Math.max(0, lp - Math.max(c.trackedLp, c.threshold)));
-    return c.flatRate * r * r;
-  };
-  const stakerShare = (lp, c) => (lp < 0 ? 0 : c.stakerCap > 0 && lp >= c.stakerCap ? 99 : 1);
-  const usdShort = (v) => { const a = Math.abs(v), s = v < 0 ? "-" : ""; return a >= 1e9 ? `${s}$${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `${s}$${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M` : `${s}$${(a / 1e3).toFixed(0)}K`; };
-
-  // One curve chart: f sampled over [x0, x1], vertical markers, a current-point dot, and a hover readout.
-  function curveChart(fig, o) {
-    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv");
-    const W = Math.max(220, fig.clientWidth), H = 150, T = 10, B = 22, R = 12;
-    const ticksY = o.ticksY, L = Math.ceil(Math.max(...ticksY.map((t) => o.fmtY(t).length)) * 5.6) + 10;
-    const x = (v) => L + ((v - o.x0) / (o.x1 - o.x0)) * (W - L - R), y = (v) => T + (1 - (v - o.y0) / (o.y1 - o.y0)) * (H - T - B);
-    const N = 360, pts = [];
-    for (let i = 0; i <= N; i++) { const v = o.x0 + ((o.x1 - o.x0) * i) / N; pts.push([v, o.f(v)]); }
-    let d = "";
-    pts.forEach(([v, w], i) => {
-      if (o.step && i) d += `H${x(v).toFixed(1)}V${y(w).toFixed(1)}`;
-      else d += `${i ? "L" : "M"}${x(v).toFixed(1)},${y(w).toFixed(1)}`;
-    });
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-    const marks = (o.markers || []).filter((m) => m.x >= o.x0 && m.x <= o.x1);
-    svg.innerHTML = ticksY.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(o.fmtY(t))}</text>`).join("")
-      + `<text class="tick" x="${L}" y="${H - 6}">${esc(o.fmtX(o.x0))}</text><text class="tick" x="${W - R}" y="${H - 6}" text-anchor="end">${esc(o.fmtX(o.x1))} ${esc(o.xLabel)}</text>`
-      // Labels step down one row per marker so neighbours never overlap; a label near the right edge flips left.
-      + marks.map((m, i) => { const lx = x(m.x), right = lx > W - R - 150; return `<line class="vmark ${m.kind || ""}" x1="${lx}" x2="${lx}" y1="${T}" y2="${H - B}"/><text class="mlabel" x="${right ? lx - 4 : lx + 4}" y="${T + 9 + i * 11}" text-anchor="${right ? "end" : "start"}">${esc(m.label)}</text>`; }).join("")
-      + (o.asymptote != null ? `<line class="asym" x1="${L}" x2="${W - R}" y1="${y(o.asymptote)}" y2="${y(o.asymptote)}"/>` : "")
-      + `<path class="line" d="${d}"/>`
-      + (o.now != null ? `<circle class="mark" r="4.5" cx="${x(o.now).toFixed(1)}" cy="${y(o.f(o.now)).toFixed(1)}"/>` : "")
-      + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
-    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-    const read = (v) => `${o.fmtY(o.f(v))} at ${o.fmtX(v)}`;
-    const show = (v) => {
-      cv.textContent = v == null ? (o.now != null ? read(o.now) : "") : read(v);
-      if (v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
-      cross.setAttribute("x1", x(v)); cross.setAttribute("x2", x(v)); cross.setAttribute("visibility", "visible");
-      dot.setAttribute("cx", x(v)); dot.setAttribute("cy", y(o.f(v))); dot.setAttribute("visibility", "visible");
-    };
-    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; show(o.x0 + Math.max(0, Math.min(1, (px - L) / (W - L - R))) * (o.x1 - o.x0)); });
-    hit.addEventListener("mouseleave", () => show(null));
-    show(null);
-  }
-
-  function renderCurves(d) {
-    const c = d.curve, box = $("curves");
-    if (!c || !(c.flatRate > 0) || !(c.decayScale > 0)) { box.innerHTML = `<p class="empty">curve inputs unavailable</p>`; return; }
-    const figs = [
-      ["mintlp", "Mint rate by LP balance (paper per $1 of realized loss)"],
-      ["share", "Staker share of realized losses by LP balance"],
-      ["minttail", "Mint rate by cumulative realized loss (tail progress)"],
-      ["supply", "PAPER supply by cumulative realized loss"],
-    ];
-    box.innerHTML = figs.map(([k, t]) => `<figure class="chart" data-curve="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)}"></svg></figure>`).join("");
-    const fig = (k) => box.querySelector(`[data-curve="${k}"]`);
-    // LP-balance domain exactly as the official chart: at least $12M, 4x the cliff and 2x the cap, a little below zero.
-    let lp1 = Math.max(12e6, c.threshold * 4, c.stakerCap * 2);
-    if (c.currentLp > lp1 * 0.9) lp1 = c.currentLp * 1.15;
-    const lp0 = -Math.max(lp1 * 0.1, -c.currentLp * 1.4);
-    const lpMarks = [
-      { x: c.threshold, label: `mint decay ${usdShort(c.threshold)}`, kind: "warn" },
-      { x: c.stakerCap, label: `staker threshold ${usdShort(c.stakerCap)}`, kind: "pos" },
-    ];
-    const rateTicks = [c.flatRate, c.flatRate / 2, c.flatRate / 4, 0];
-    curveChart(fig("mintlp"), { x0: lp0, x1: lp1, y0: 0, y1: c.flatRate * 1.08, f: (v) => curveRate(v, c), ticksY: rateTicks, fmtY: (v) => `${v.toFixed(1)}/$`, fmtX: usdShort, xLabel: "lp", markers: lpMarks, now: c.currentLp });
-    curveChart(fig("share"), { x0: lp0, x1: lp1, y0: 0, y1: 105, f: (v) => stakerShare(v, c), step: true, ticksY: [99, 50, 1], fmtY: (v) => `${Math.round(v)}%`, fmtX: usdShort, xLabel: "lp", markers: lpMarks, now: c.currentLp });
-    // Tail curve over its whole useful range: until the rate falls to 1 PAPER/$ (progress = 9 D at flat 100).
-    const Dd = c.decayScale, tailEnd = Dd * (Math.sqrt(c.flatRate) - 1), tailRate = (p) => c.flatRate * (Dd / (Dd + p)) ** 2;
-    curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: (v) => `${v.toFixed(1)}/$`, fmtX: usdShort, xLabel: "realized",
-      markers: [{ x: Dd * (Math.SQRT2 - 1), label: `half rate ${usdShort(Dd * (Math.SQRT2 - 1))}` }, { x: Dd, label: `quarter ${usdShort(Dd)}` }], now: c.tailProgress });
-    // Supply: what is already minted outside the tail formula stays; the tail adds flat*D*P/(D+P), approaching flat*D.
-    const tailMinted = (p) => (c.flatRate * Dd * p) / (Dd + p), base = c.supplyPaper - tailMinted(c.tailProgress), limit = base + c.flatRate * Dd;
-    curveChart(fig("supply"), { x0: 0, x1: tailEnd, y0: 0, y1: limit * 1.06, f: (p) => base + tailMinted(p), ticksY: [limit, limit / 2, 0], fmtY: (v) => `${(v / 1e9).toFixed(2)}B`, fmtX: usdShort, xLabel: "realized",
-      asymptote: limit, markers: [{ x: Dd, label: `limit ${(limit / 1e9).toFixed(2)}B (no more cliff dips)` }], now: c.tailProgress });
-    $("curvehint").textContent = `the protocol's fixed rules over their whole range · current lp ${usdShort(c.currentLp)} → staker share ${stakerShare(c.currentLp, c)}% · as of ${hourLabel(c.atMs)} · hover to read`;
-  }
+  // The Stats page (Now / Activity / Rules) is drawn by stats.js.
+  const renderStats = () => window.paperboardsStats && state.data && window.paperboardsStats.render(state.data);
 
   // Two pages in one document, chosen by the URL hash (#leaderboard is the default).
   // Charts are drawn when the stats page becomes visible, since hidden figures have no width.
@@ -547,12 +227,12 @@
     for (const el of document.querySelectorAll("[data-page]")) el.hidden = el.dataset.page !== view;
     for (const a of document.querySelectorAll(".views a")) a.classList.toggle("on", a.dataset.view === view);
     document.title = `paperboards · ${view}`;
-    if (view === "stats" && state.data) { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); }
+    if (view === "stats" && state.data) { renderStats(); }
   }
   window.addEventListener("hashchange", route);
   route();
   let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); } }, 150); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderStats(); } }, 150); });
 
   function renderMeta(d) {
     const lines = [
@@ -584,8 +264,7 @@
       $("tape").innerHTML = `<div class="kpi"><span>no data yet — run npm run depositors:index</span><b>${esc(e.message)}</b></div>`;
       return;
     }
-    renderTape(state.data);
-    if (location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); }
+    if (location.hash === "#stats") { renderStats(); }
     $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();
