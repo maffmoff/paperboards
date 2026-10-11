@@ -56,6 +56,7 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .chart .dot { fill: var(--pos); stroke: var(--panel); stroke-width: 2; }
 .chart .hit { fill: transparent; cursor: crosshair; }
 .charts-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
 .chart .line2 { fill: none; stroke: var(--ink-muted); stroke-width: 1.5; stroke-dasharray: 3 3; }
 .chart .mark { fill: var(--neg); stroke: var(--panel); stroke-width: 2; }
 .chart .pt { fill: var(--pos); }
@@ -83,6 +84,8 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 @media (max-width: 760px) { .kpis.kpis-4, .kpis.kpis-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .acards { grid-template-columns: minmax(0, 1fr); } }
 }
 .charts.charts-1 { grid-template-columns: minmax(0, 1fr); }
+.chart .projband { fill: var(--pos); opacity: .12; }
+.chart .line.proj { stroke-dasharray: 4 4; opacity: .75; }
 .chart .bar { fill: var(--pos); }
 .chart .barneg { fill: var(--neg); }
 .chart .dipband { fill: rgba(122, 98, 53, .16); }
@@ -178,12 +181,9 @@ th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
 .cardnote { min-height: 16px; margin: 10px 16px 14px; font-size: 11px; color: var(--ink-label); }
 
 /* Columns: 1 # · 2 wallet · 3 balance · 4 paper · 5 share · 6 trade pnl · 7 net pnl · 8 $/paper · 9 rewards
-   · 10 withdrawn · 11 deposits · 12 largest · 13 first · 14 card (always shown) */
-@media (max-width: 1500px) {
-  th:nth-child(12), td:nth-child(12), th:nth-child(13), td:nth-child(13) { display: none; }
-}
+   · 10 withdrawn · 11 card (always shown) */
 @media (max-width: 1240px) {
-  th:nth-child(10), td:nth-child(10), th:nth-child(11), td:nth-child(11) { display: none; }
+  th:nth-child(10), td:nth-child(10) { display: none; }
 }
 @media (max-width: 860px) {
   th:nth-child(9), td:nth-child(9), th:nth-child(6), td:nth-child(6) { display: none; }
@@ -204,3 +204,16 @@ th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
   .kpi { padding: 10px 12px; }
   .kpi b { font-size: 14px; }
 }
+
+/* share bar markup from app.js is drawn in v2 only (style-v2.css) */
+.sharebar { display: none; }
+
+/* activity as full charts (stats.js): headline above each chart */
+.chart.act .aval { display: flex; align-items: baseline; gap: 16px; margin: 0 0 6px; }
+.chart.act .aval b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.chart.act .aval em { font-style: normal; font-size: 11px; font-weight: 500; color: var(--ink-faint); }
+
+/* stats page: one column grid for every panel (two chart columns = four tile columns), no panel subtitles */
+section[data-page="stats"] .panel-head .sub { display: none; }
+section[data-page="stats"] .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 720px) { section[data-page="stats"] .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

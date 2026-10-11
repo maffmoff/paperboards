@@ -32,14 +32,11 @@
     balance: (a, b) => cmp(big(b.balance18 ?? "0"), big(a.balance18 ?? "0")),
     rewards: (a, b) => cmp(rewardsTotal(b), rewardsTotal(a)),
     netPnl: (a, b) => cmp(big(b.netPnl18 ?? "0"), big(a.netPnl18 ?? "0")),
-    count: (a, b) => b.depositCount - a.depositCount,
-    largest: (a, b) => cmp(big(b.largestUsdc), big(a.largestUsdc)),
     paper: (a, b) => cmp(big(b.paper18 ?? "0"), big(a.paper18 ?? "0")),
     pnl: (a, b) => cmp(big(b.pnl18 ?? "0"), big(a.pnl18 ?? "0")),
     // Compares -pnl/paper exactly by cross-multiplying (paper is positive whenever cost exists).
     share: (a, b) => cmp(big(b.paper18 ?? "0"), big(a.paper18 ?? "0")),
     cost: (a, b) => { const x = costOf(a), y = costOf(b); return x && y ? cmp(y.num * x.den, x.num * y.den) : 0; },
-    first: (a, b) => b.firstBlock - a.firstBlock,
     last: (a, b) => b.lastBlock - a.lastBlock,
   };
   // Rows without a value for the sorted column stay at the bottom in both directions.
@@ -86,9 +83,19 @@
     return total && big(total) > 0n ? Number((big(s) * 1000000n) / big(total)) / 1e6 : null;
   }
   const pct = (x, d = 2) => (x == null ? "–" : `${(x * 100).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}%`);
+  // Largest single-wallet share, cached per data load; the share bar (shown in v2 only) is scaled to it.
+  let topShare = { data: null, x: 1 };
+  function topShareOf() {
+    if (topShare.data !== state.data) {
+      const max = state.data.rows.reduce((m, r) => (r.paper18 != null && big(r.paper18) > m ? big(r.paper18) : m), 0n);
+      topShare = { data: state.data, x: shareOf(max.toString()) || 1 };
+    }
+    return topShare.x;
+  }
   function shareCell(r) {
     const x = shareOf(r.paper18);
-    return `<td class="num ${x == null ? "dim" : ""}" title="share of total PAPER supply">${x == null ? "–" : x < 0.00005 && x > 0 ? "<0.01%" : pct(x)}</td>`;
+    const bar = x == null ? "" : `<span class="sharebar"><i style="width:${Math.min(100, (x / topShareOf()) * 100).toFixed(1)}%"></i></span>`;
+    return `<td class="num ${x == null ? "dim" : ""}" title="share of total PAPER supply">${x == null ? "–" : bar + (x < 0.00005 && x > 0 ? "<0.01%" : pct(x))}</td>`;
   }
   // Acquisition cost per PAPER = -(realized + unrealized pnl) / paper; both 18 decimals, so the
   // ratio is in dollars. Negative means the wallet is in profit overall. Null without PAPER.
@@ -204,9 +211,6 @@
         ${costCell(r)}
         ${rewardsCell(r)}
         <td class="num ${wd ? "neg" : "dim"}">${wd ? usd(r.withdrawnUsdc) : "–"}</td>
-        <td class="num">${r.depositCount}</td>
-        <td class="num">${txLink(r.largestTx, usd(r.largestUsdc))}</td>
-        <td class="num dim">${txLink(r.firstTx, when(r.firstTs))}</td>
         <td class="cardcol">${state.mode === "entities" ? `<button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button>` : `<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button>`}</td>
       </tr>`;
     }).join("");
@@ -220,6 +224,77 @@
   // The Stats page (Now / Activity / Rules) is drawn by stats.js.
   const renderStats = () => window.paperboardsStats && state.data && window.paperboardsStats.render(state.data);
 
+  // Dev fee: the owner-set dev fee recipient's claims of the dev half of trading fees (docs: 2% win fee and
+  // 2% LP-side loss fee, half to stakers and half to the dev fee recipient), every claim event since genesis
+  // (src/depositors/devfee.ts), plus the live unclaimed accumulator and the recipient's Exchange balance.
+  function lineChart(fig, vals, timeAt, fmt, onHover) {
+    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv"), n = vals.length;
+    const nums = vals.filter((v) => v != null && Number.isFinite(v));
+    if (nums.length < 2) { cv.textContent = nums.length ? fmt(nums[nums.length - 1]) : "–"; return () => {}; }
+    let lo = Math.min(0, ...nums), hi = Math.max(...nums);
+    if (lo === hi) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const tickText = [lo + pad, (lo + hi) / 2, hi - pad].map((t) => fmt(t));
+    const W = Math.max(220, fig.clientWidth), H = 150, L = Math.ceil(Math.max(...tickText.map((t) => t.length)) * 5.6) + 10, R = 10, T = 8, B = 20;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    const x = (i) => L + (n === 1 ? 0 : (i / (n - 1)) * (W - L - R)), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+    let path = "", pen = false;
+    vals.forEach((v, i) => { if (v == null || !Number.isFinite(v)) { pen = false; return; } path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
+    const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
+    svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(fmt(t))}</text>`).join("")
+      + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
+      + `<path class="line" d="${path}"/><line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
+    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
+    const show = (i) => {
+      const at = i == null ? n - 1 : i, v = vals[at];
+      cv.textContent = v == null || !Number.isFinite(v) ? "–" : fmt(v);
+      if (i == null || v == null || !Number.isFinite(v)) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible"); dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
+    };
+    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; onHover(Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))))); });
+    hit.addEventListener("mouseleave", () => onHover(null));
+    show(null);
+    return show;
+  }
+
+  function renderDevFee(d) {
+    // The team's fee income: how much has accrued in total (claimed + still unclaimed) and how it grew.
+    const f = d.devFee, kp = $("devfeekpis"), box = $("devfeecharts"), tbl = $("devfeeclaims");
+    const baseHint = "the team's half of every trading fee (1% of settled pnl) · accrued = claimed + unclaimed";
+    if (tbl) tbl.innerHTML = "";
+    if (!f) { kp.innerHTML = `<div class="kpi"><span>dev fees accrued</span><b>–</b></div>`; box.innerHTML = ""; $("devfeehint").textContent = "not indexed yet"; return; }
+    const usdOf = (s18) => (s18 == null ? null : Number(big(s18) / 1000000000000n) / 1e6);
+    const money = (v) => (v == null ? "–" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
+    const claimed = usdOf(f.claimedTotal18), unclaimed = usdOf(f.unclaimed18);
+    const accrued = claimed == null ? null : claimed + (unclaimed ?? 0);
+    kp.innerHTML = `<div class="kpi"><span>dev fees accrued · all time</span><b>${esc(money(accrued))}</b></div>`;
+    $("devfeehint").textContent = baseHint;
+    box.innerHTML = `<figure class="chart"><figcaption><span>Dev fees accrued, cumulative</span><b class="cv"></b></figcaption><svg role="img" aria-label="cumulative dev fees accrued"></svg></figure>`;
+    const fig = box.querySelector(".chart");
+    // Preferred: one accrued reading (claimed + unclaimed) per index run, which grows smoothly. Readings are
+    // about 10 minutes apart; the x axis spaces them evenly by reading.
+    const acc = Array.isArray(f.accrued) ? f.accrued.filter((x) => x && Number.isFinite(x.usd)) : [];
+    if (acc.length >= 2) {
+      const draws = [], at = (i) => acc[i].ms;
+      const hover = (i) => { draws.forEach((g) => g(i)); $("devfeehint").textContent = i == null ? baseHint : hourLabel(at(i)); };
+      draws.push(lineChart(fig, acc.map((x) => x.usd), at, money, hover));
+      return;
+    }
+    const s = f.series, n = s ? s.cumulative.length : 0, timeAt = (i) => s.startMs + i * s.intervalMs;
+    if (s && n >= 2) {
+      // Claims arrive in batches; the last point carries what has accrued but is not claimed yet, so the line
+      // ends at the accrued total shown above.
+      const series = s.cumulative.slice();
+      if (accrued != null) series[n - 1] = Math.max(series[n - 1] ?? 0, accrued);
+      const draws = [];
+      const hover = (i) => { draws.forEach((g) => g(i)); $("devfeehint").textContent = i == null ? baseHint : hourLabel(timeAt(i)); };
+      draws.push(lineChart(fig, series, timeAt, money, hover));
+    } else {
+      box.querySelector(".cv").textContent = "not enough history yet";
+    }
+  }
+
+
   // Two pages in one document, chosen by the URL hash (#leaderboard is the default).
   // Charts are drawn when the stats page becomes visible, since hidden figures have no width.
   function route() {
@@ -227,12 +302,15 @@
     for (const el of document.querySelectorAll("[data-page]")) el.hidden = el.dataset.page !== view;
     for (const a of document.querySelectorAll(".views a")) a.classList.toggle("on", a.dataset.view === view);
     document.title = `paperboards · ${view}`;
-    if (view === "stats" && state.data) { renderStats(); }
+    if (view === "stats" && state.data) { renderStats(); renderDevFee(state.data); }
   }
   window.addEventListener("hashchange", route);
   route();
+  // Share links (card.js, lp.html) open the board filtered: #leaderboard?q=<address or name>.
+  const linked = /[?&]q=([^&]*)/.exec(location.hash);
+  if (linked) { state.q = decodeURIComponent(linked[1]); $("q").value = state.q; }
   let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderStats(); } }, 150); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderStats(); renderDevFee(state.data); } }, 150); });
 
   function renderMeta(d) {
     const lines = [
@@ -241,6 +319,7 @@
       `amounts are usdc as emitted (8 decimals); times are interpolated from sampled block timestamps`,
     ];
     if (d.crossCheck && d.crossCheck.apiTrackedBalance18) lines.push(`cross-check: official api tracked balance ${usd18(d.crossCheck.apiTrackedBalance18)} vs net deposits ${usd(d.totals.netUsdc, false)}`);
+    if (d.devFee) lines.push(`dev fee: the dev half of trading fees (docs: 2% win fee and 2% lp-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the exchange (topic 0x8163d4e6…) since genesis, binned hourly; unclaimed = devFeeAccumulator(), balance = the recipient's exchange balance, both read at each index run`);
     if (d.staking) lines.push(`rewards: usdc from paperstaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via multicall3, read at each index run) · net pnl = trade pnl + rewards`);
     lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
     lines.push(`share: paper ÷ total paper supply · inflation, staked and reward rate: /query/protocol/history (hourly) over the last 24h, or since paper supply was first recorded if that is shorter (the window is shown); early windows give extreme rates`);
@@ -264,7 +343,7 @@
       $("tape").innerHTML = `<div class="kpi"><span>no data yet — run npm run depositors:index</span><b>${esc(e.message)}</b></div>`;
       return;
     }
-    if (location.hash === "#stats") { renderStats(); }
+    if (location.hash === "#stats") { renderStats(); renderDevFee(state.data); }
     $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();

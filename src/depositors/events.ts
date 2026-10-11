@@ -127,7 +127,38 @@ export function decodeClaimLog(log: RawLog, staking: string): ClaimEvent | null 
 export const serializeClaim = (e: ClaimEvent): Record<string, unknown> => ({ ...e, amount18: e.amount18.toString() });
 export const deserializeClaim = (o: Record<string, unknown>): ClaimEvent => ({ ...(o as object), amount18: BigInt(o.amount18 as string) }) as ClaimEvent;
 
-export function eventKey(e: ExchangeEvent | ClaimEvent): string {
+/**
+ * Exchange dev-fee claim (2026-10-11, from the receipts of the dev fee recipient's
+ * "Claim Dev Fees" calls, selector 0x88f2aea5): the owner-set recipient moved the
+ * accumulated dev half of trading fees (docs: half of each 2% fee goes to stakers,
+ * half to the dev fee recipient) into its Exchange balance.
+ *   topics[1] = recipient, data = (amount 18dp, amount 18dp)
+ * The event name is not published; the topic is a PUSH32 constant in the
+ * Exchange implementation like the others here.
+ */
+export const DEV_FEE_CLAIMED_TOPIC: Hex = "0x8163d4e6d566c87ca3ced41f12809febe576911226e4d7165eb7178e74557a6f";
+
+export interface DevFeeClaimEvent {
+  recipient: Hex;
+  amount18: bigint;
+  block: number;
+  txHash: Hex;
+  logIndex: number;
+}
+
+/** Returns null unless the log is a dev-fee claim emitted by `exchange`. */
+export function decodeDevFeeClaimLog(log: RawLog, exchange: string): DevFeeClaimEvent | null {
+  if (log.address.toLowerCase() !== exchange.toLowerCase()) return null;
+  if (log.topics[0]?.toLowerCase() !== DEV_FEE_CLAIMED_TOPIC || log.topics.length !== 2) return null;
+  const words = dataWords(log.data);
+  if (words.length < 1) return null;
+  return { recipient: topicToAddress(log.topics[1]), amount18: words[0], block: Number(BigInt(log.blockNumber)), txHash: log.transactionHash, logIndex: Number(BigInt(log.logIndex)) };
+}
+
+export const serializeDevFeeClaim = (e: DevFeeClaimEvent): Record<string, unknown> => ({ ...e, amount18: e.amount18.toString() });
+export const deserializeDevFeeClaim = (o: Record<string, unknown>): DevFeeClaimEvent => ({ ...(o as object), amount18: BigInt(o.amount18 as string) }) as DevFeeClaimEvent;
+
+export function eventKey(e: ExchangeEvent | ClaimEvent | DevFeeClaimEvent): string {
   return `${e.txHash}:${e.logIndex}`;
 }
 

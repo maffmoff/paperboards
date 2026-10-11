@@ -33,16 +33,20 @@
   <section class="panel" data-page="stats">
     <div class="panel-head"><h2>Activity</h2>
       <div class="seg" id="period" role="group" aria-label="Period">
-        <button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button><button type="button" data-period="7d">7D</button><button type="button" data-period="30d">30D</button><button type="button" data-period="all">All</button>
-      </div>
+        <button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button></div>
       <span class="sub" id="activityhint"></span></div>
     <div class="acards" id="activity-rows"></div>
   </section>
 
   <section class="panel" data-page="stats">
     <div class="panel-head"><h2>Rules</h2><span class="sub">fixed protocol parameters and the curves they define · hover to read</span></div>
-    <div class="kpis kpis-5" id="rules-params"></div>
     <div class="charts charts-2" id="rules-curves"></div>
+  </section>
+
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>Dev fee</h2><span class="sub" id="devfeehint">the team's half of every trading fee (1% of settled pnl) · claim events on the exchange</span></div>
+    <div class="kpis" id="devfeekpis"></div>
+    <div class="charts charts-1" id="devfeecharts"></div>
   </section>
 
   <section class="panel" data-page="leaderboard">
@@ -77,9 +81,6 @@
         <th class="num"><button type="button" data-sort="cost" title="acquisition cost per PAPER: −pnl ÷ paper">$/paper</button></th>
         <th class="num"><button type="button" data-sort="rewards" title="USDC staking rewards: claimed + unclaimed (PaperStaking)">rewards</button></th>
         <th class="num"><button type="button" data-sort="withdrawn">withdrawn</button></th>
-        <th class="num"><button type="button" data-sort="count">deposits</button></th>
-        <th class="num"><button type="button" data-sort="largest">largest</button></th>
-        <th class="num"><button type="button" data-sort="first">first</button></th>
         <th class="cardcol" aria-label="share card"></th>
       </tr>
     </thead>
@@ -95,7 +96,7 @@
   </section>
 
   <section class="panel">
-    <div class="panel-head"><h2>Sources</h2><span class="sub">public api and hyperevm logs</span></div>
+    <div class="panel-head"><h2>Sources</h2></div>
     <footer class="foot" id="meta"></footer>
   </section>
 </main>

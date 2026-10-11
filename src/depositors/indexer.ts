@@ -9,9 +9,15 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { EXCHANGE, ORIGIN, PAPER_STAKING, RPC_URL } from "../config.js";
+import { decodeFunctionResult, encodeFunctionData, parseAbi } from "viem";
 import {
   CLAIMED_TOPIC,
+  DEV_FEE_CLAIMED_TOPIC,
   decodeClaimLog,
+  decodeDevFeeClaimLog,
+  deserializeDevFeeClaim,
+  serializeDevFeeClaim,
+  type DevFeeClaimEvent,
   deserializeClaim,
   serializeClaim,
   type ClaimEvent,
@@ -29,6 +35,7 @@ import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "
 import { curveParams, marketSeries, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, type CurveParams, type HouseHistory, type ProtocolHistory } from "./protocol.js";
 import { costWindows } from "./cost-windows.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
+import { appendDevFeeSample, devFeeSummary, type DevFeeSample, type DevFeeSummary } from "./devfee.js";
 import { logLine } from "../logging.js";
 import { SUMMARY_LOG_PATH, analyze, mintHeadline, mintSeries, readRecords, sampleOnce } from "../summary-recorder.js";
 
@@ -105,6 +112,11 @@ export interface Checkpoint {
   /** PaperStaking Claimed events, and the block they are scanned through (inclusive). */
   claims: ClaimEvent[];
   claimsThrough: number;
+  /** Exchange dev-fee claim events (src/depositors/devfee.ts), and the block they are scanned through (inclusive). */
+  devFees: DevFeeClaimEvent[];
+  devFeesThrough: number;
+  /** One accrual reading per index run (src/depositors/devfee.ts), last 30 days. */
+  devFeeSamples: DevFeeSample[];
   /** Sampled [block, unix seconds] pairs used for interpolation. */
   blockTimestamps: [number, number][];
 }
@@ -114,11 +126,11 @@ function loadCheckpoint(fromBlock: number): Checkpoint {
     const raw = JSON.parse(readFileSync(CHECKPOINT_PATH, "utf8"));
     if (raw.exchange === EXCHANGE && raw.fromBlock === fromBlock) {
       // Checkpoints written before claims were tracked start their claim scan at fromBlock.
-      return { ...raw, events: raw.events.map(deserializeEvent), claims: (raw.claims ?? []).map(deserializeClaim), claimsThrough: raw.claimsThrough ?? fromBlock - 1 };
+      return { ...raw, events: raw.events.map(deserializeEvent), claims: (raw.claims ?? []).map(deserializeClaim), claimsThrough: raw.claimsThrough ?? fromBlock - 1, devFees: (raw.devFees ?? []).map(deserializeDevFeeClaim), devFeesThrough: raw.devFeesThrough ?? fromBlock - 1, devFeeSamples: raw.devFeeSamples ?? [] };
     }
     console.error(`checkpoint ignored: exchange/fromBlock differ (${raw.exchange}, ${raw.fromBlock})`);
   }
-  return { version: 1, chainId: 999, exchange: EXCHANGE, fromBlock, scannedThrough: fromBlock - 1, events: [], claims: [], claimsThrough: fromBlock - 1, blockTimestamps: [] };
+  return { version: 1, chainId: 999, exchange: EXCHANGE, fromBlock, scannedThrough: fromBlock - 1, events: [], claims: [], claimsThrough: fromBlock - 1, devFees: [], devFeesThrough: fromBlock - 1, devFeeSamples: [], blockTimestamps: [] };
 }
 
 function writeJsonAtomic(path: string, value: unknown) {
@@ -129,7 +141,7 @@ function writeJsonAtomic(path: string, value: unknown) {
 }
 
 function saveCheckpoint(cp: Checkpoint) {
-  writeJsonAtomic(CHECKPOINT_PATH, { ...cp, events: cp.events.map(serializeEvent), claims: cp.claims.map(serializeClaim) });
+  writeJsonAtomic(CHECKPOINT_PATH, { ...cp, events: cp.events.map(serializeEvent), claims: cp.claims.map(serializeClaim), devFees: cp.devFees.map(serializeDevFeeClaim) });
 }
 
 async function blockTimestamp(block: number): Promise<number> {
@@ -302,6 +314,33 @@ async function fetchPendingRewards(users: Hex[]): Promise<Map<string, bigint>> {
   return out;
 }
 
+const exchangeAbi = parseAbi([
+  "function devFeeRecipient() view returns (address)",
+  "function devFeeAccumulator() view returns (uint256)",
+  "function balances(address user) view returns (uint256)",
+]);
+
+/**
+ * Live dev-fee state from the Exchange (getters found by name on 2026-10-11, ABI unpublished):
+ * the owner-set recipient, the unclaimed accumulator and the recipient's Exchange balance
+ * (claims credit that balance; it is where the dev share sits until withdrawn). Fails soft per call.
+ */
+async function fetchDevFeeLive(): Promise<{ recipient: Hex | null; unclaimed18: bigint | null; recipientBalance18: bigint | null }> {
+  const call = async <F extends "devFeeRecipient" | "devFeeAccumulator" | "balances">(functionName: F, args: F extends "balances" ? [Hex] : []) => {
+    try {
+      const data = await rpc<Hex>("eth_call", [{ to: EXCHANGE, data: encodeFunctionData({ abi: exchangeAbi, functionName, args } as never) }, "latest"]);
+      return decodeFunctionResult({ abi: exchangeAbi, functionName, data } as never) as F extends "devFeeRecipient" ? Hex : bigint;
+    } catch (e) {
+      console.error(`${functionName} unavailable: ${(e as Error).message}`);
+      return null;
+    }
+  };
+  const recipient = (await call("devFeeRecipient", [])) as Hex | null;
+  const unclaimed18 = (await call("devFeeAccumulator", [])) as bigint | null;
+  const recipientBalance18 = recipient ? ((await call("balances", [recipient])) as bigint | null) : null;
+  return { recipient: recipient ? (recipient.toLowerCase() as Hex) : null, unclaimed18, recipientBalance18 };
+}
+
 export interface IndexOptions {
   fromBlock?: number;
   toBlock?: number;
@@ -341,15 +380,39 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     await sleep(60);
   }
 
+  const knownDevFees = new Set(cp.devFees.map(eventKey));
+  const addDevFees = (logs: RawLog[]) => {
+    for (const raw of logs) {
+      const c = decodeDevFeeClaimLog(raw, EXCHANGE);
+      if (!c || knownDevFees.has(eventKey(c))) continue;
+      knownDevFees.add(eventKey(c));
+      cp.devFees.push(c);
+    }
+  };
+
+  // One-off backfill: blocks already scanned before dev-fee claims were tracked.
+  if (cp.devFeesThrough < cp.scannedThrough) log(`dev-fee backfill ${cp.devFeesThrough + 1} -> ${cp.scannedThrough}`);
+  while (cp.devFeesThrough < cp.scannedThrough) {
+    const s = cp.devFeesThrough + 1, e = Math.min(s + MAX_LOG_RANGE - 1, cp.scannedThrough);
+    addDevFees(await rpc<RawLog[]>("eth_getLogs", [{ address: EXCHANGE, topics: [DEV_FEE_CLAIMED_TOPIC], fromBlock: `0x${s.toString(16)}`, toBlock: `0x${e.toString(16)}` }]));
+    cp.devFeesThrough = e;
+    if ((e - fromBlock) % (MAX_LOG_RANGE * 20) < MAX_LOG_RANGE || e === cp.scannedThrough) {
+      saveCheckpoint(cp);
+      log(`dev-fee claims through ${e}: ${cp.devFees.length} total`);
+    }
+    await sleep(60);
+  }
+
   let start = cp.scannedThrough + 1;
   let windows = 0;
   log(`scan ${start} -> ${head} (${Math.max(0, head - start + 1)} blocks)`);
   while (start <= head) {
     const end = Math.min(start + MAX_LOG_RANGE - 1, head);
     const logs = await rpc<RawLog[]>("eth_getLogs", [
-      { address: [EXCHANGE, PAPER_STAKING], topics: [[DEPOSIT_TOPIC, WITHDRAW_TOPIC, CLAIMED_TOPIC]], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` },
+      { address: [EXCHANGE, PAPER_STAKING], topics: [[DEPOSIT_TOPIC, WITHDRAW_TOPIC, CLAIMED_TOPIC, DEV_FEE_CLAIMED_TOPIC]], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` },
     ]);
     addClaims(logs);
+    addDevFees(logs);
     let added = 0;
     for (const raw of logs) {
       const e = decodeExchangeLog(raw);
@@ -364,6 +427,7 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     if (windows % TS_SAMPLE_WINDOWS === 0 || end === head) cp.blockTimestamps.push([end, await blockTimestamp(end)]);
     cp.scannedThrough = end;
     cp.claimsThrough = end;
+    cp.devFeesThrough = end;
     if (windows % 10 === 0 || end === head) {
       saveCheckpoint(cp);
       log(`through ${end}: +${added} events this window, ${cp.events.length} total`);
@@ -382,6 +446,12 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
   const pending = await fetchPendingRewards(depositors);
   log(`pending rewards read for ${pending.size}/${depositors.length} depositors`);
   const mint = await fetchMintStats();
+  const devFeeLive = await fetchDevFeeLive();
+  const claimedTotal18 = cp.devFees.reduce((s, c) => s + c.amount18, 0n);
+  cp.devFeeSamples = appendDevFeeSample(cp.devFeeSamples, devFeeLive.unclaimed18 == null ? null : { ms: Date.now(), block: cp.scannedThrough, claimed18: claimedTotal18.toString(), unclaimed18: devFeeLive.unclaimed18.toString() });
+  saveCheckpoint(cp);
+  const devFee: DevFeeSummary = devFeeSummary(cp.devFees, devFeeLive, makeTimestampInterpolator(cp.blockTimestamps), Date.now(), cp.devFeeSamples);
+  log(`dev fee: ${devFee.claimCount} claims, ${devFee.claimedTotal18} claimed (18dp), unclaimed ${devFee.unclaimed18 ?? "n/a"}`);
   const hlNames = opts.withNames === false ? new Map<string, string>() : await fetchHyperliquidNames();
   const tsOf = makeTimestampInterpolator(cp.blockTimestamps);
   const { rows, totals } = buildRanking(cp.events, { tsOf, names: enrichment.names, hlNames, stats: enrichment.stats, claims: cp.claims, pending });
@@ -400,6 +470,8 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     protocol,
     /** Mint curve from the /query/protocol/summary samples in data/summary.jsonl (src/summary-recorder.ts); USD and PAPER as plain numbers. */
     mint,
+    /** Dev half of trading fees (docs: half of each 2% fee to the dev fee recipient): every claim event since genesis, the live unclaimed accumulator and the recipient's Exchange balance (src/depositors/devfee.ts); 18dp strings and hourly USD bins. */
+    devFee,
     /** Open interest in USD per market and side, hourly (/query/house/history?interval=1h). */
     openInterest,
     /** Reward-curve inputs from /query/protocol/summary (official chart definitions; src/depositors/protocol.ts). */
