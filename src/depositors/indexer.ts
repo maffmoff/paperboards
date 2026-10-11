@@ -26,7 +26,7 @@ import {
   type RawLog,
 } from "./events.js";
 import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "./rank.js";
-import { curveParams, marketSeries, periodFlows, periodRates, protocolSeries, protocolStats, type CurveParams, type ProtocolHistory } from "./protocol.js";
+import { curveParams, marketSeries, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, type CurveParams, type HouseHistory, type ProtocolHistory } from "./protocol.js";
 import { costWindows } from "./cost-windows.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
 import { logLine } from "../logging.js";
@@ -227,6 +227,18 @@ async function fetchProtocolSummaryFigures(): Promise<{ tvl: string | null; curv
   }
 }
 
+/** Hourly open interest per market and side (/query/house/history, the official Open Interest chart). Fails soft. */
+async function fetchOpenInterest() {
+  try {
+    const res = await fetch(`${ORIGIN}/query/house/history?interval=1h`, { headers: { accept: "application/json" } });
+    if (!res.ok) return null;
+    return openInterestSeries((await res.json()) as HouseHistory);
+  } catch (e) {
+    console.error(`open interest history unavailable: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** Hourly protocol history (supply, staked, staking rewards). Fails soft. */
 async function fetchProtocolStats() {
   try {
@@ -364,6 +376,7 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
 
   const enrichment = opts.withNames === false ? emptyLeaderboard() : await fetchLeaderboard();
   const { tvl, curve } = await fetchProtocolSummaryFigures();
+  const openInterest = await fetchOpenInterest();
   const protocol = await fetchProtocolStats();
   const depositors = [...new Set(cp.events.filter((e) => e.kind === "deposit").map((e) => e.user))];
   const pending = await fetchPendingRewards(depositors);
@@ -387,6 +400,8 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     protocol,
     /** Mint curve from the /query/protocol/summary samples in data/summary.jsonl (src/summary-recorder.ts); USD and PAPER as plain numbers. */
     mint,
+    /** Open interest in USD per market and side, hourly (/query/house/history?interval=1h). */
+    openInterest,
     /** Reward-curve inputs from /query/protocol/summary (official chart definitions; src/depositors/protocol.ts). */
     curve,
     crossCheck: {

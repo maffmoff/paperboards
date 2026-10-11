@@ -63,23 +63,24 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .chart .vmark.warn { stroke: var(--warm); }
 .chart .vmark.pos { stroke: var(--pos); }
 .chart .mlabel { font-size: 9px; fill: var(--ink-muted); text-transform: uppercase; letter-spacing: .3px; }
-/* stats.js: vertical lists */
-.vlist .kpi { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 16px; padding: 10px 16px; border-right: 0; }
-.vlist .kpi b { text-align: right; }
-.wrow { display: grid; grid-template-columns: minmax(150px, 190px) minmax(110px, 140px) minmax(0, 1fr) 260px; align-items: center; gap: 12px; padding: 7px 16px; border-bottom: 1px solid var(--row); }
-.wrow:hover { background: var(--hover); }
-.wl { font-size: 12px; font-weight: 500; color: var(--ink-label); }
-.wv { font-size: 15px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.ws { font-style: normal; font-size: 11px; font-weight: 600; color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chart.spark { display: grid; grid-template-columns: minmax(0, 1fr) 64px; align-items: center; gap: 8px; padding: 0; border: 0; margin: 0; }
-.chart.spark svg { order: 1; width: 100%; height: 36px; }
-.chart.spark figcaption { order: 2; margin: 0; justify-content: flex-end; }
+/* stats.js: compact tiles and cards, centred at 1120px */
+.board > section[data-page="stats"] { width: min(1120px, 100%); justify-self: center; }
+.kpis.kpis-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.kpis.kpis-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kpi em { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.acard { display: grid; grid-template-columns: minmax(0, 1fr) 150px; align-items: center; gap: 10px; padding: 10px 14px; border-right: 1px solid var(--row); border-bottom: 1px solid var(--row); min-width: 0; }
+.atext { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.atext span { font-size: 11px; font-weight: 500; color: var(--ink-label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.atext b { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.atext em { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart.spark { position: relative; margin: 0; padding: 0; border: 0; }
+.chart.spark svg { display: block; width: 150px; height: 40px; }
+.chart.spark figcaption { position: absolute; top: -12px; right: 0; margin: 0; pointer-events: none; }
 .chart.spark figcaption span { display: none; }
-.chart.spark figcaption b { font-size: 11px; font-weight: 600; color: var(--ink-muted); }
-@media (max-width: 720px) {
-  .wrow { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; padding: 8px 12px; }
-  .wrow .ws { grid-column: 1 / -1; }
-  .wrow .chart.spark { grid-column: 1 / -1; }
+.chart.spark figcaption b { font-size: 9.5px; font-weight: 600; color: var(--ink-muted); background: var(--panel); padding: 0 2px; }
+@media (max-width: 1040px) { .acards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.kpis-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .kpis.kpis-4, .kpis.kpis-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .acards { grid-template-columns: minmax(0, 1fr); } }
 }
 .charts.charts-1 { grid-template-columns: minmax(0, 1fr); }
 .chart .bar { fill: var(--pos); }

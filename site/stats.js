@@ -21,7 +21,7 @@
   const pct = (x, d = 1) => (x == null || !Number.isFinite(x) ? "–" : `${(x * 100).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}%`);
   const unit = (v, d = 4) => (v == null || !Number.isFinite(v) ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(d)}`);
   const hourLabel = (ms) => new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-  const kpi = (label, value, title = "") => `<div class="kpi"${title ? ` title="${esc(title)}"` : ""}><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+  const kpi = (label, value, title = "", note = "") => `<div class="kpi"${title ? ` title="${esc(title)}"` : ""}><span>${esc(label)}</span><b>${esc(value)}</b>${note ? `<em>${esc(note)}</em>` : ""}</div>`;
 
   // ---------------------------------------------------------------------------------------------- Now
   const maxSupply = (c) => (c && c.decayScale > 0 && c.flatRate > 0 ? c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress) : null);
@@ -31,23 +31,24 @@
     const p = d.protocol || {}, c = d.curve, m = d.mint, cc = d.crossCheck || {};
     const big = (s) => BigInt(s ?? "0");
     const balances = Number(d.rows.reduce((s, r) => s + big(r.balance18), 0n) / 10n ** 12n) / 1e6;
-    const max = maxSupply(c);
-    const items = [
-      kpi("user balances", usd(balances), "sum of every depositor's account value (deposits − withdrawals + pnl + rewards claimed); not TVL"),
-      kpi("staked", p.paperSupply ? pct(p.paperStaked / p.paperSupply) : "–", "share of PAPER supply staked"),
-      kpi("max supply ≈", paper(max), "supply + what the tail curve can still mint (no further cliff dips)"),
-      kpi("valuation · all-time avg cost × max supply", max != null && p.avgCost != null ? usd(p.avgCost * max) : "–"),
-    ];
+    const max = maxSupply(c), users = cc.apiUniqueAccounts || d.totals.depositors;
+    const items = [];
     if (m && typeof m.ratePerUsd === "number") {
       const T = m.tailProgressUsd, D = c && c.decayScale > 0 ? c.decayScale : 120e6, next = Math.SQRT2 * (D + T) - D;
       const hrs = m.tailSpeedUsdPerHour > 0 ? (next - T) / m.tailSpeedUsdPerHour : null;
       items.push(
-        kpi("cost to mint now · no hedge", unit(m.mintCostUsd)),
-        kpi(`cost to mint now · hedged ±${m.hedgedCostTargetBps ?? 15} bps`, unit(m.hedgedMintCostUsd)),
-        kpi("rate halves again at", `${usd(next)} realized${hrs != null ? ` · ${hrs < 48 ? `${hrs.toFixed(1)} h` : `${(hrs / 24).toFixed(1)} d`}` : ""}`, "time at the recent pace of realized losses"),
-        kpi("payout queue", m.queueUsd > 0 ? usd(m.queueUsd) : "empty"),
+        kpi("cost to mint now · no hedge", unit(m.mintCostUsd), "", `1 ÷ (0.98 × ${m.ratePerUsd.toFixed(1)}/$)`),
+        kpi(`cost to mint now · hedged ±${m.hedgedCostTargetBps ?? 15} bps`, unit(m.hedgedMintCostUsd), "", m.hedgedWinRatio ? `win leg recovers ${pct(m.hedgedWinRatio, 0)}` : ""),
+        kpi("rate halves again at", usd(next), "realized losses", hrs != null ? `~${hrs < 48 ? `${hrs.toFixed(1)} h` : `${(hrs / 24).toFixed(1)} d`} at ${usd(m.tailSpeedUsdPerHour)}/h` : ""),
+        kpi("payout queue", m.queueUsd > 0 ? usd(m.queueUsd) : "empty", "", m.queueUsd > 0 ? "wins are queued; loss fee waived" : "wins paid at once"),
       );
     }
+    items.push(
+      kpi("user balances", usd(balances), "sum of every depositor's account value; not TVL", `${count(users)} users`),
+      kpi("staked", p.paperSupply ? pct(p.paperStaked / p.paperSupply) : "–", "", `of ${paper(p.paperSupply)} supply`),
+      kpi("max supply ≈", paper(max), "", "if lp never dips below the cliff"),
+      kpi("valuation", max != null && p.avgCost != null ? usd(p.avgCost * max) : "–", "all-time average cost per PAPER × max supply", p.avgCost != null ? `${unit(p.avgCost)} / paper × max supply` : ""),
+    );
     $("now").innerHTML = items.join("");
   }
 
@@ -74,27 +75,30 @@
     const mintPts = ms && ms.ratePerUsd ? ms.ratePerUsd.map((v, i) => [ms.startMs + i * ms.intervalMs, v]).filter(([x]) => x >= t0) : [];
     const dips = (d.mint && d.mint.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
     const last = (arr) => (arr && arr.length ? arr[arr.length - 1] : null);
+    const oi = d.openInterest;
+    const oiPts = oi ? oi.times.map((x, i) => [x, oi.total[i]]).filter(([x]) => x >= t0) : null;
     // [label, value, title, chart points, formatter, bars, bands]
     // One row per quantity; figures derived from the same numbers share its row instead of repeating it.
     const apr = a && a.apr != null ? `apr ${pct(a.apr, 0)}` : null;
     const cost = a && a.costPerPaper != null ? `${unit(a.costPerPaper)} per paper minted` : null;
     const growth = f ? `+${paper(f.paperMinted)}${a && a.inflation != null ? ` (+${pct(a.inflation, a.inflation < 0.01 ? 2 : 1)})` : ""} · ${tag(f)}` : null;
-    const join = (...xs) => xs.filter(Boolean).join(" · ");
+    const peak = (arr, fmt) => { const v = arr ? arr.map(([, x]) => x).filter((x) => x != null && Number.isFinite(x)) : []; return v.length ? `peak ${fmt(Math.max(...v))} / h` : null; };
     // [label, value, sub-value, title, chart points, formatter, bars, bands]
     const rows = [
-      [`volume · ${tag(f)}`, f ? usd(f.volume) : "–", null, "total traded over the period; bars = per hour", m && pts(m.volumePerInterval), usd, true],
-      [`trades · ${tag(f)}`, f ? count(f.trades) : "–", null, "trades over the period; bars = per hour", m && pts(m.tradesPerInterval), count, true],
+      [`volume · ${tag(f)}`, f ? usd(f.volume) : "–", m && peak(pts(m.volumePerInterval), usd), "total traded over the period; bars = per hour", m && pts(m.volumePerInterval), usd, true],
+      [`trades · ${tag(f)}`, f ? count(f.trades) : "–", m && peak(pts(m.tradesPerInterval), count), "trades over the period; bars = per hour", m && pts(m.tradesPerInterval), count, true],
       [`trader pnl · ${tag(f)}`, f ? signedUsd(f.pnlChange) : "–", cost, "change in cumulative trader pnl (negative = traders lost) and the net loss per PAPER minted in the period; bars = per hour", m && pts(m.pnlPerInterval), signedUsd, true],
       [`staker rewards · ${tag(f)}`, f ? usd(f.rewards) : "–", apr, "USDC paid to stakers over the period; apr = per staked PAPER, annualized, ÷ all-time average cost per PAPER; bars = per hour", m && pts(m.rewardsPerInterval), usd, true],
-      ["tvl", d.crossCheck && d.crossCheck.apiTvl18 ? usd(Number(BigInt(d.crossCheck.apiTvl18) / 10n ** 12n) / 1e6) : usd(m && last(m.tvl)), null, "official protocol treasury value", m && pts(m.tvl), usd],
+      ["tvl", d.crossCheck && d.crossCheck.apiTvl18 ? usd(Number(BigInt(d.crossCheck.apiTvl18) / 10n ** 12n) / 1e6) : usd(m && last(m.tvl)), m && m.tvl.length > 1 ? `${signedUsd(last(m.tvl) - pts(m.tvl)[0][1])} · ${tag(f)}` : null, "official protocol treasury value", m && pts(m.tvl), usd],
       ["users", count((d.crossCheck && d.crossCheck.apiUniqueAccounts) || (m && last(m.users))), f ? `+${count(f.newUsers)} · ${tag(f)}` : null, "accounts now and added over the period", m && pts(m.users), count],
       ["paper supply", paper(p.paperSupply), growth, "PAPER now, minted over the period and the growth that is (inflation)", m && pts(m.paperSupply), paper],
-      ["mint rate", d.mint && typeof d.mint.ratePerUsd === "number" ? `${d.mint.ratePerUsd.toFixed(1)} / $` : "–", null, "PAPER per $1 of realized loss now; shaded = cliff dip (lp below the mint-decay threshold)", mintPts, (v) => `${v.toFixed(1)}/$`, false, dips],
+      ...(oi ? [["open interest", usd(last(oi.total)), `btc ${usd(last(oi.btcLong) + last(oi.btcShort))} · eth ${usd(last(oi.ethLong) + last(oi.ethShort))}`, "entry notional of open positions, long + short (official house history)", oiPts, usd]] : []),
+      ["mint rate", d.mint && typeof d.mint.ratePerUsd === "number" ? `${d.mint.ratePerUsd.toFixed(1)} / $` : "–", (d.mint && d.mint.dips && d.mint.dips.length) ? `${d.mint.dips.length} cliff dips shaded` : "cliff dips shaded · none so far", "PAPER per $1 of realized loss now; shaded = cliff dip (lp below the mint-decay threshold)", mintPts, (v) => `${v.toFixed(1)}/$`, false, dips],
     ];
-    // Watchlist rows: name | value | related figure | sparkline | the sparkline's value at the hovered time.
-    box.innerHTML = rows.map(([label, value, sub, title, points], i) => `<div class="wrow"${title ? ` title="${esc(title)}"` : ""}>
-      <span class="wl">${esc(label)}</span><b class="wv">${esc(value)}</b><em class="ws">${esc(sub || "")}</em>
-      ${points ? `<figure class="chart spark" data-i="${i}"><figcaption><span></span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(label)} history"></svg></figure>` : `<span></span>`}
+    // Cards: name / value / note on the left, a 150x40 sparkline on the right (hover to read a point).
+    box.innerHTML = rows.map(([label, value, sub, title, points], i) => `<div class="acard"${title ? ` title="${esc(title)}"` : ""}>
+      <div class="atext"><span>${esc(label)}</span><b>${esc(value)}</b><em>${esc(sub || "")}</em></div>
+      ${points ? `<figure class="chart spark" data-i="${i}"><figcaption><span></span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(label)} history"></svg></figure>` : ""}
     </div>`).join("");
     const base = `hourly · ${hours == null ? "since genesis" : hours < 24 ? "last 24 h" : `last ${hours >= 168 ? `${hours / 24} days` : `${hours} h`}`} · hover a chart to read every row at that time`;
     $("activityhint").textContent = base;
@@ -117,7 +121,7 @@
     const pad = (hi - lo) * 0.08; lo -= lo < 0 ? pad : 0; hi += pad;
     const ticks = opts.compact ? [] : [hi - pad, (lo + hi - pad) / 2, lo < 0 ? lo + pad : 0];
     const W = Math.max(opts.compact ? 120 : 200, fig.querySelector("svg").clientWidth || fig.clientWidth);
-    const H = opts.compact ? 36 : 132, L = opts.compact ? 1 : Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10, R = opts.compact ? 1 : 10, T = opts.compact ? 3 : 8, B = opts.compact ? 3 : 20;
+    const H = opts.compact ? 40 : 132, L = opts.compact ? 1 : Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10, R = opts.compact ? 1 : 10, T = opts.compact ? 3 : 8, B = opts.compact ? 3 : 20;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
     const x = (ms) => L + ((ms - t0) / Math.max(1, t1 - t0)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
     let marks = "";
@@ -140,7 +144,7 @@
     const nearest = (ms) => pts.reduce((best, p) => (Math.abs(p[0] - ms) < Math.abs(best[0] - ms) ? p : best), pts[0]);
     const show = (ms) => {
       const p = ms == null ? pts[pts.length - 1] : nearest(ms);
-      cv.textContent = fmt(p[1]);
+      cv.textContent = opts.compact && ms == null ? "" : fmt(p[1]);
       if (ms == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
       cross.setAttribute("x1", x(p[0])); cross.setAttribute("x2", x(p[0])); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", x(p[0])); dot.setAttribute("cy", y(p[1])); dot.setAttribute("visibility", opts.bars ? "hidden" : "visible");

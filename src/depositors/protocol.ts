@@ -290,3 +290,40 @@ export function periodFlows(h: ProtocolHistory): Record<PeriodKey, PeriodFlows |
   };
   return Object.fromEntries(Object.entries(PERIODS).map(([k, v]) => [k, one(v)])) as Record<PeriodKey, PeriodFlows | null>;
 }
+
+/**
+ * Open interest from GET /query/house/history?interval=1h (the official stats page's Open Interest chart):
+ * entry notional of open positions in USD per side, bl/bs = BTC long/short, el/es = ETH long/short.
+ * Points carry their own times (baseTimeMs + timeOffsetsMs); gap indices are dropped.
+ */
+export interface HouseHistory {
+  baseTimeMs: number;
+  timeOffsetsMs: number[];
+  gapIndices?: number[];
+  columns: Record<string, number[]>;
+}
+
+export interface OpenInterestSeries {
+  times: number[];
+  btcLong: number[];
+  btcShort: number[];
+  ethLong: number[];
+  ethShort: number[];
+  total: number[];
+}
+
+export function openInterestSeries(h: HouseHistory): OpenInterestSeries | null {
+  const c = h.columns ?? {}, n = (h.timeOffsetsMs ?? []).length;
+  if (n === 0 || !c.bl || !c.bs || !c.el || !c.es) return null;
+  const gaps = new Set(h.gapIndices ?? []);
+  const out: OpenInterestSeries = { times: [], btcLong: [], btcShort: [], ethLong: [], ethShort: [], total: [] };
+  for (let i = 0; i < n; i++) {
+    if (gaps.has(i)) continue;
+    const v = [c.bl[i], c.bs[i], c.el[i], c.es[i]];
+    if (!v.every(Number.isFinite)) continue;
+    out.times.push(h.baseTimeMs + h.timeOffsetsMs[i]);
+    out.btcLong.push(v[0]); out.btcShort.push(v[1]); out.ethLong.push(v[2]); out.ethShort.push(v[3]);
+    out.total.push(v[0] + v[1] + v[2] + v[3]);
+  }
+  return out.times.length ? out : null;
+}

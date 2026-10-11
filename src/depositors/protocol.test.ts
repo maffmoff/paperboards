@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { curveParams, marketSeries, mintRateAtLp, periodFlows, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
+import { curveParams, marketSeries, mintRateAtLp, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
 
 const hourly = (values: (i: number) => number, n = 30) => Array.from({ length: n }, (_, i) => values(i));
 const H = 3_600_000;
@@ -146,5 +146,12 @@ describe("periodFlows", () => {
     expect(f["1d"]).toMatchObject({ hours: 24, clamped: false, volume: 240 });
     expect(f["7d"]).toMatchObject({ hours: 29, clamped: true, volume: 290 });
     expect(f.all).toMatchObject({ hours: 29, clamped: false, newUsers: 87 });
+  });
+});
+
+describe("openInterestSeries", () => {
+  it("sums both sides of both markets per point and drops gaps", () => {
+    const o = openInterestSeries({ baseTimeMs: 1000, timeOffsetsMs: [0, H, 2 * H], gapIndices: [1], columns: { bl: [1, 9, 2], bs: [2, 9, 3], el: [3, 9, 4], es: [4, 9, 5] } })!;
+    expect(o).toEqual({ times: [1000, 1000 + 2 * H], btcLong: [1, 2], btcShort: [2, 3], ethLong: [3, 4], ethShort: [4, 5], total: [10, 14] });
   });
 });
