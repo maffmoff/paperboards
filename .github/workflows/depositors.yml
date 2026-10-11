@@ -4,13 +4,15 @@ name: depositors
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # GitHub runs scheduled jobs with some delay; expect 10-20 min between updates
+    - cron: "*/10 * * * *"   # backstop only: GitHub delays schedules by hours on young repos, so the
+                             # "next" job below chains runs ~10 min apart; a schedule run restarts the chain if it breaks
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write   # the "next" job dispatches the following run
 
 concurrency:
   group: depositors-pages
@@ -62,3 +64,22 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Starts the following run ~10 min after this one began. workflow_dispatch is the one event the
+  # built-in GITHUB_TOKEN may trigger, so no personal token is needed. Runs share the concurrency
+  # group above, so a duplicate chain only ever queues one pending run and the extra is cancelled.
+  # Disable the workflow (gh workflow disable depositors.yml) to stop the chain.
+  next:
+    needs: [build, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait until 10 minutes after this run started, then dispatch the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          started=$(gh run view ${{ github.run_id }} --json createdAt -q .createdAt)
+          wait=$(( 600 - ( $(date +%s) - $(date -d "$started" +%s) ) ))
+          if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+          gh workflow run depositors.yml --ref ${{ github.ref_name }}
