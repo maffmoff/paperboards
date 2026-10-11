@@ -26,7 +26,7 @@ import {
   type RawLog,
 } from "./events.js";
 import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "./rank.js";
-import { protocolSeries, protocolStats, type ProtocolHistory } from "./protocol.js";
+import { curveParams, protocolSeries, protocolStats, type CurveParams, type ProtocolHistory } from "./protocol.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
 import { logLine } from "../logging.js";
 import { SUMMARY_LOG_PATH, analyze, mintHeadline, mintSeries, readRecords, sampleOnce } from "../summary-recorder.js";
@@ -213,14 +213,16 @@ export async function fetchHyperliquidNames(): Promise<Map<string, string>> {
   return names;
 }
 
-async function fetchProtocolTvl(): Promise<string | null> {
+/** TVL and the reward-curve inputs from one /query/protocol/summary read. Fails soft. */
+async function fetchProtocolSummaryFigures(): Promise<{ tvl: string | null; curve: CurveParams | null }> {
   try {
     const res = await fetch(`${ORIGIN}/query/protocol/summary`, { headers: { accept: "application/json" } });
-    if (!res.ok) return null;
+    if (!res.ok) return { tvl: null, curve: null };
     const body = (await res.json()) as { ok: boolean; balances?: { tvl: string } };
-    return body.ok ? body.balances?.tvl ?? null : null;
+    if (!body.ok) return { tvl: null, curve: null };
+    return { tvl: body.balances?.tvl ?? null, curve: curveParams(body) };
   } catch {
-    return null;
+    return { tvl: null, curve: null };
   }
 }
 
@@ -360,7 +362,7 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
   saveCheckpoint(cp);
 
   const enrichment = opts.withNames === false ? emptyLeaderboard() : await fetchLeaderboard();
-  const tvl = await fetchProtocolTvl();
+  const { tvl, curve } = await fetchProtocolSummaryFigures();
   const protocol = await fetchProtocolStats();
   const depositors = [...new Set(cp.events.filter((e) => e.kind === "deposit").map((e) => e.user))];
   const pending = await fetchPendingRewards(depositors);
@@ -384,6 +386,8 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     protocol,
     /** Mint curve from the /query/protocol/summary samples in data/summary.jsonl (src/summary-recorder.ts); USD and PAPER as plain numbers. */
     mint,
+    /** Reward-curve inputs from /query/protocol/summary (official chart definitions; src/depositors/protocol.ts). */
+    curve,
     crossCheck: {
       /** 18-decimal strings from the official API, for comparison with totals.netUsdc (8 decimals). */
       apiTvl18: tvl,

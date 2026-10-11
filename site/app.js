@@ -130,6 +130,13 @@
   const txLink = (tx, label) => (tx ? `<a class="tx" href="${state.data.explorer}/tx/${tx}" target="_blank" rel="noopener" title="${tx}">${label}</a>` : label);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // Approximate maximum PAPER supply: what exists now plus what the tail curve can still mint,
+  // flat * D^2 / (D + tailProgress). Further dips of LP below the cliff (flat-rate minting) are not included.
+  function maxSupply(c) {
+    if (!c || !(c.decayScale > 0) || !(c.flatRate > 0)) return null;
+    return c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress);
+  }
+
   function renderTape(d) {
     const t = d.totals, p = d.protocol;
     const items = [
@@ -145,6 +152,10 @@
         [`staker rewards ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.rewards == null ? "–" : `$${(p.rewards / 1e6).toFixed(2)}M`],
         ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
         ["cost / paper", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`],
+        ...(maxSupply(d.curve) != null ? [
+          ["max supply ≈", `${(maxSupply(d.curve) / 1e9).toFixed(2)}B`],
+          ["valuation · cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
+        ] : []),
         ["reward / paper / yr", p.rewardPerPaperYear == null ? "–" : `$${p.rewardPerPaperYear.toFixed(4)}`],
       ] : d.crossCheck && d.crossCheck.apiTrackedPaper18 ? [["paper", paperAmt(d.crossCheck.apiTrackedPaper18)]] : []),
     ];
@@ -343,8 +354,7 @@
     ];
     kp.innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
     $("minthint").textContent = `paper per $ of realized loss · docs curve on the live summary · as of ${hourLabel(m.atMs)} · ${m.samples ?? 0} samples`;
-    box.innerHTML = `<figure class="chart"><figcaption><span>Mint rate (10-minute bins)</span><b id="mint-cv"></b></figcaption><svg role="img" aria-label="mint rate over time"></svg></figure>
-      <figure class="chart"><figcaption><span>Position on the curve</span><b>${esc(`${M(T)} → ${m.ratePerUsd.toFixed(1)}`)}</b></figcaption><svg role="img" aria-label="mint rate against realized losses"></svg></figure>`;
+    box.innerHTML = `<figure class="chart"><figcaption><span>Mint rate (10-minute bins)</span><b id="mint-cv"></b></figcaption><svg role="img" aria-label="mint rate over time"></svg></figure>`;
     const figs = box.querySelectorAll(".chart"), H = 132, TOP = 8, BOT = 20, R = 10, L = 34;
     // Chart 1: rate by bin, gaps where nothing was sampled.
     {
@@ -371,18 +381,87 @@
         show(null);
       } else { cv.textContent = `${m.ratePerUsd.toFixed(1)} · not enough samples for a chart`; }
     }
-    // Chart 2: the curve r(P) with every sampled (tailProgress, rate) and the current point.
-    {
-      const fig = figs[1], svg = fig.querySelector("svg");
-      const W = Math.max(200, fig.clientWidth), maxP = Math.max(D, T * 1.2);
-      svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-      const x = (p) => L + (p / maxP) * (W - L - R), y = (v) => TOP + (1 - v / m.flatRate) * (H - TOP - BOT);
-      const curve = []; for (let i = 0; i <= 80; i++) { const p = (maxP * i) / 80; curve.push(`${i ? "L" : "M"}${x(p).toFixed(1)},${y(m.flatRate * (D / (D + p)) ** 2).toFixed(1)}`); }
-      const pts = s ? s.tailProgressUsd.map((p, i) => (p == null || s.ratePerUsd[i] == null ? "" : `<circle class="pt" r="1.5" cx="${x(p).toFixed(1)}" cy="${y(s.ratePerUsd[i]).toFixed(1)}"/>`)).join("") : "";
-      svg.innerHTML = [m.flatRate, m.flatRate / 2, m.flatRate / 4].map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${t}</text>`).join("")
-        + `<text class="tick" x="${L}" y="${H - 5}">$0</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(M(maxP))} realized</text>`
-        + `<path class="line2" d="${curve.join("")}"/>${pts}<circle class="mark" r="4.5" cx="${x(T).toFixed(1)}" cy="${y(m.ratePerUsd).toFixed(1)}"><title>${esc(`${M(T)} realized → ${m.ratePerUsd.toFixed(1)} paper per $`)}</title></circle>`;
-    }
+  }
+
+  // Curves: the rules that turn LP balance and realized losses into PAPER and staker revenue,
+  // drawn over their whole range from /query/protocol/summary (definitions as in the official
+  // frontend's reward-curve chart and reward-rate tiers; src/depositors/protocol.ts).
+  const curveRate = (lp, c) => {
+    if (lp < c.threshold) return c.flatRate;
+    if (c.decayScale <= 0) return 0;
+    const r = c.decayScale / (c.decayScale + c.tailProgress + Math.max(0, lp - Math.max(c.trackedLp, c.threshold)));
+    return c.flatRate * r * r;
+  };
+  const stakerShare = (lp, c) => (lp < 0 ? 0 : c.stakerCap > 0 && lp >= c.stakerCap ? 99 : 1);
+  const usdShort = (v) => { const a = Math.abs(v), s = v < 0 ? "-" : ""; return a >= 1e9 ? `${s}$${(a / 1e9).toFixed(2)}B` : a >= 1e6 ? `${s}$${(a / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M` : `${s}$${(a / 1e3).toFixed(0)}K`; };
+
+  // One curve chart: f sampled over [x0, x1], vertical markers, a current-point dot, and a hover readout.
+  function curveChart(fig, o) {
+    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv");
+    const W = Math.max(220, fig.clientWidth), H = 150, T = 10, B = 22, R = 12;
+    const ticksY = o.ticksY, L = Math.ceil(Math.max(...ticksY.map((t) => o.fmtY(t).length)) * 5.6) + 10;
+    const x = (v) => L + ((v - o.x0) / (o.x1 - o.x0)) * (W - L - R), y = (v) => T + (1 - (v - o.y0) / (o.y1 - o.y0)) * (H - T - B);
+    const N = 360, pts = [];
+    for (let i = 0; i <= N; i++) { const v = o.x0 + ((o.x1 - o.x0) * i) / N; pts.push([v, o.f(v)]); }
+    let d = "";
+    pts.forEach(([v, w], i) => {
+      if (o.step && i) d += `H${x(v).toFixed(1)}V${y(w).toFixed(1)}`;
+      else d += `${i ? "L" : "M"}${x(v).toFixed(1)},${y(w).toFixed(1)}`;
+    });
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    const marks = (o.markers || []).filter((m) => m.x >= o.x0 && m.x <= o.x1);
+    svg.innerHTML = ticksY.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(o.fmtY(t))}</text>`).join("")
+      + `<text class="tick" x="${L}" y="${H - 6}">${esc(o.fmtX(o.x0))}</text><text class="tick" x="${W - R}" y="${H - 6}" text-anchor="end">${esc(o.fmtX(o.x1))} ${esc(o.xLabel)}</text>`
+      // Labels step down one row per marker so neighbours never overlap; a label near the right edge flips left.
+      + marks.map((m, i) => { const lx = x(m.x), right = lx > W - R - 150; return `<line class="vmark ${m.kind || ""}" x1="${lx}" x2="${lx}" y1="${T}" y2="${H - B}"/><text class="mlabel" x="${right ? lx - 4 : lx + 4}" y="${T + 9 + i * 11}" text-anchor="${right ? "end" : "start"}">${esc(m.label)}</text>`; }).join("")
+      + (o.asymptote != null ? `<line class="asym" x1="${L}" x2="${W - R}" y1="${y(o.asymptote)}" y2="${y(o.asymptote)}"/>` : "")
+      + `<path class="line" d="${d}"/>`
+      + (o.now != null ? `<circle class="mark" r="4.5" cx="${x(o.now).toFixed(1)}" cy="${y(o.f(o.now)).toFixed(1)}"/>` : "")
+      + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
+    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
+    const read = (v) => `${o.fmtY(o.f(v))} at ${o.fmtX(v)}`;
+    const show = (v) => {
+      cv.textContent = v == null ? (o.now != null ? read(o.now) : "") : read(v);
+      if (v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
+      cross.setAttribute("x1", x(v)); cross.setAttribute("x2", x(v)); cross.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", x(v)); dot.setAttribute("cy", y(o.f(v))); dot.setAttribute("visibility", "visible");
+    };
+    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; show(o.x0 + Math.max(0, Math.min(1, (px - L) / (W - L - R))) * (o.x1 - o.x0)); });
+    hit.addEventListener("mouseleave", () => show(null));
+    show(null);
+  }
+
+  function renderCurves(d) {
+    const c = d.curve, box = $("curves");
+    if (!c || !(c.flatRate > 0) || !(c.decayScale > 0)) { box.innerHTML = `<p class="empty">curve inputs unavailable</p>`; return; }
+    const figs = [
+      ["mintlp", "Mint rate by LP balance (paper per $1 of realized loss)"],
+      ["share", "Staker share of realized losses by LP balance"],
+      ["minttail", "Mint rate by cumulative realized loss (tail progress)"],
+      ["supply", "PAPER supply by cumulative realized loss"],
+    ];
+    box.innerHTML = figs.map(([k, t]) => `<figure class="chart" data-curve="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)}"></svg></figure>`).join("");
+    const fig = (k) => box.querySelector(`[data-curve="${k}"]`);
+    // LP-balance domain exactly as the official chart: at least $12M, 4x the cliff and 2x the cap, a little below zero.
+    let lp1 = Math.max(12e6, c.threshold * 4, c.stakerCap * 2);
+    if (c.currentLp > lp1 * 0.9) lp1 = c.currentLp * 1.15;
+    const lp0 = -Math.max(lp1 * 0.1, -c.currentLp * 1.4);
+    const lpMarks = [
+      { x: c.threshold, label: `mint decay ${usdShort(c.threshold)}`, kind: "warn" },
+      { x: c.stakerCap, label: `staker threshold ${usdShort(c.stakerCap)}`, kind: "pos" },
+    ];
+    const rateTicks = [c.flatRate, c.flatRate / 2, c.flatRate / 4, 0];
+    curveChart(fig("mintlp"), { x0: lp0, x1: lp1, y0: 0, y1: c.flatRate * 1.08, f: (v) => curveRate(v, c), ticksY: rateTicks, fmtY: (v) => `${v.toFixed(1)}/$`, fmtX: usdShort, xLabel: "lp", markers: lpMarks, now: c.currentLp });
+    curveChart(fig("share"), { x0: lp0, x1: lp1, y0: 0, y1: 105, f: (v) => stakerShare(v, c), step: true, ticksY: [99, 50, 1], fmtY: (v) => `${Math.round(v)}%`, fmtX: usdShort, xLabel: "lp", markers: lpMarks, now: c.currentLp });
+    // Tail curve over its whole useful range: until the rate falls to 1 PAPER/$ (progress = 9 D at flat 100).
+    const Dd = c.decayScale, tailEnd = Dd * (Math.sqrt(c.flatRate) - 1), tailRate = (p) => c.flatRate * (Dd / (Dd + p)) ** 2;
+    curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: (v) => `${v.toFixed(1)}/$`, fmtX: usdShort, xLabel: "realized",
+      markers: [{ x: Dd * (Math.SQRT2 - 1), label: `half rate ${usdShort(Dd * (Math.SQRT2 - 1))}` }, { x: Dd, label: `quarter ${usdShort(Dd)}` }], now: c.tailProgress });
+    // Supply: what is already minted outside the tail formula stays; the tail adds flat*D*P/(D+P), approaching flat*D.
+    const tailMinted = (p) => (c.flatRate * Dd * p) / (Dd + p), base = c.supplyPaper - tailMinted(c.tailProgress), limit = base + c.flatRate * Dd;
+    curveChart(fig("supply"), { x0: 0, x1: tailEnd, y0: 0, y1: limit * 1.06, f: (p) => base + tailMinted(p), ticksY: [limit, limit / 2, 0], fmtY: (v) => `${(v / 1e9).toFixed(2)}B`, fmtX: usdShort, xLabel: "realized",
+      asymptote: limit, markers: [{ x: Dd, label: `limit ${(limit / 1e9).toFixed(2)}B (no more cliff dips)` }], now: c.tailProgress });
+    $("curvehint").textContent = `the protocol's fixed rules over their whole range · current lp ${usdShort(c.currentLp)} → staker share ${stakerShare(c.currentLp, c)}% · as of ${hourLabel(c.atMs)} · hover to read`;
   }
 
   // Two pages in one document, chosen by the URL hash (#leaderboard is the default).
@@ -392,12 +471,12 @@
     for (const el of document.querySelectorAll("[data-page]")) el.hidden = el.dataset.page !== view;
     for (const a of document.querySelectorAll(".views a")) a.classList.toggle("on", a.dataset.view === view);
     document.title = `paperboards · ${view}`;
-    if (view === "stats" && state.data) { renderHistory(state.data); renderMint(state.data); }
+    if (view === "stats" && state.data) { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); }
   }
   window.addEventListener("hashchange", route);
   route();
   let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); } }, 150); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); } }, 150); });
 
   function renderMeta(d) {
     const lines = [
@@ -410,6 +489,7 @@
     lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
     lines.push(`share: paper ÷ total paper supply · inflation, staked and reward rate: /query/protocol/history (hourly) over the last 24h, or since paper supply was first recorded if that is shorter (the window is shown); early windows give extreme rates`);
     lines.push(`apr (protocol-wide): (staker rewards over that window ÷ mean staked paper, annualized) ÷ cost per paper, where cost per paper = −cumulative trader pnl ÷ paper supply; history charts evaluate the same definitions at every hour`);
+    lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress) from /query/protocol/summary (further dips of lp below the cliff would mint more) · valuation = cost per paper × max supply`);
     lines.push(`$/paper: acquisition cost per paper = −pnl ÷ paper (realized + unrealized); negative = in profit overall`);
     lines.push(`pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split`);
     lines.push(`paper: paperTotal per wallet from the official leaderboard api (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there`);
@@ -428,7 +508,7 @@
       return;
     }
     renderTape(state.data);
-    if (location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); }
+    if (location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); }
     $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();

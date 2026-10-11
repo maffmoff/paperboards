@@ -97,3 +97,55 @@ export function protocolSeries(h: ProtocolHistory): ProtocolSeries | null {
   }
   return out;
 }
+
+/**
+ * Inputs of the official reward-curve chart (frontend selectors bundle, 2026-10-11), from
+ * /query/protocol/summary. USD and PAPER as plain numbers.
+ *   currentLp = balances.lp + balances.reserve - balances.queue
+ *   staker share of realized losses: 0% when currentLp < 0, 99% when currentLp >= cap, else 1%
+ */
+export interface CurveParams {
+  atMs: number;
+  flatRate: number;
+  /** paper.cliff: below this LP the mint rate is flat ("mint decay" marker). */
+  threshold: number;
+  /** paper.decay: D in rate = flat * (D / (D + tailProgress))^2. */
+  decayScale: number;
+  tailProgress: number;
+  trackedLp: number;
+  /** paper.cap: LP at which stakers receive 99% ("staker threshold" marker). */
+  stakerCap: number;
+  currentLp: number;
+  supplyPaper: number;
+}
+
+export function curveParams(summary: any): CurveParams | null {
+  const p = summary?.paper, b = summary?.balances;
+  if (!p || !b) return null;
+  const n = (v: unknown) => Number(BigInt(String(v))) / 1e18;
+  return {
+    atMs: Number(summary.source?.at ?? 0),
+    flatRate: n(p.rate),
+    threshold: n(p.cliff),
+    decayScale: n(p.decay),
+    tailProgress: n(p.tailProgress),
+    trackedLp: n(p.trackedLp),
+    stakerCap: n(p.cap),
+    currentLp: n(b.lp) + n(b.reserve) - n(b.queue),
+    supplyPaper: n(p.supply),
+  };
+}
+
+/** PAPER per $1 of realized loss if the LP balance were `lp` (the official chart's function). */
+export function mintRateAtLp(lp: number, c: CurveParams): number {
+  if (lp < c.threshold) return c.flatRate;
+  if (c.decayScale <= 0) return 0;
+  const progress = c.tailProgress + Math.max(0, lp - Math.max(c.trackedLp, c.threshold));
+  const r = c.decayScale / (c.decayScale + progress);
+  return c.flatRate * r * r;
+}
+
+/** Share of realized user losses paid to stakers at LP balance `lp`, in percent. */
+export function stakerSharePct(lp: number, c: Pick<CurveParams, "stakerCap">): number {
+  return lp < 0 ? 0 : c.stakerCap > 0 && lp >= c.stakerCap ? 99 : 1;
+}

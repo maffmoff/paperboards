@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { protocolSeries, protocolStats } from "./protocol.js";
+import { curveParams, mintRateAtLp, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
 
 const hourly = (values: (i: number) => number, n = 30) => Array.from({ length: n }, (_, i) => values(i));
 const H = 3_600_000;
@@ -67,5 +67,28 @@ describe("protocolSeries", () => {
     expect(s.rewardsPerInterval).toEqual([null, 2, 2, 2]);
     expect(s.apr[0]).toBeNull();
     expect(s.apr[3]).toBeCloseTo(protocolStats(h)!.apr!);
+  });
+});
+
+describe("reward curve", () => {
+  const e18 = (x: number) => (BigInt(Math.round(x * 1e6)) * 10n ** 12n).toString();
+  const c = curveParams({
+    source: { at: 1 },
+    balances: { lp: e18(4_000_000), reserve: e18(1_500_000), queue: e18(500_000) },
+    paper: { rate: e18(100), cliff: e18(2_000_000), decay: e18(120_000_000), tailProgress: e18(30_000_000), trackedLp: e18(4_900_000), cap: e18(5_000_000), supply: e18(1e9) },
+  })!;
+
+  it("reads the summary like the official selectors", () => {
+    expect(c).toMatchObject({ flatRate: 100, threshold: 2e6, decayScale: 120e6, tailProgress: 30e6, trackedLp: 4.9e6, stakerCap: 5e6, currentLp: 5e6, supplyPaper: 1e9 });
+  });
+
+  it("is flat below the threshold and decays with progress past tracked LP above it", () => {
+    expect(mintRateAtLp(1e6, c)).toBe(100);
+    expect(mintRateAtLp(3e6, c)).toBeCloseTo(100 * (120 / 150) ** 2);
+    expect(mintRateAtLp(14.9e6, c)).toBeCloseTo(100 * (120 / 160) ** 2); // 10M past tracked LP
+  });
+
+  it("pays stakers 0% below zero LP, 1% up to the cap, 99% from the cap", () => {
+    expect([stakerSharePct(-1, c), stakerSharePct(0, c), stakerSharePct(4.99e6, c), stakerSharePct(5e6, c)]).toEqual([0, 1, 1, 99]);
   });
 });
