@@ -141,6 +141,23 @@ td.num a.tx:hover { color: var(--ink); border-bottom-style: solid; }
 .foot a:hover { color: var(--ink); }
 .foot code { font-size: 10.5px; }
 
+/* wallet detail (detail.js) */
+#rows tr:has(td.addr) { cursor: pointer; }
+.detailbox { width: min(560px, 100%); }
+.dbody { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; padding: 8px 16px 4px; }
+.dgroup h3 { margin: 8px 0 4px; font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--ink-faint); }
+.drow { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--row); font-size: 12px; }
+.drow span { color: var(--ink-label); display: flex; flex-direction: column; }
+.drow span em { font-style: normal; font-size: 10px; color: var(--ink-faint); }
+.drow b { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.drow b.neg { color: var(--neg); } .drow b.pos { color: var(--pos); }
+.dactions { padding-top: 12px; }
+.dactions a, .dactions button { all: unset; cursor: pointer; font-size: 12px; font-weight: 600; padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); color: var(--ink); }
+.dactions a.primary { background: var(--ink); color: var(--raised); border-color: var(--ink); }
+.dactions a:hover, .dactions button:hover { background: var(--hover); }
+.dactions a.primary:hover { background: var(--ink-2); }
+@media (max-width: 720px) { .dbody { grid-template-columns: 1fr; } }
+
 /* share cards (card.js) */
 th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
 .cardbtn { all: unset; cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: 1px; }
