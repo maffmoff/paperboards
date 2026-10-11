@@ -22,6 +22,9 @@ button, input, select { font-family: var(--sans); }
 .views a:hover { color: var(--ink); }
 .views a.on { font-weight: 600; color: var(--ink); border-bottom-color: var(--ink); }
 [hidden] { display: none !important; }
+.askgpt { all: unset; cursor: pointer; margin-left: auto; font-size: 11px; font-weight: 600; color: var(--ink); padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); white-space: nowrap; }
+.askgpt:hover { background: var(--hover); }
+.askgpt + .updated { margin-left: 14px; }
 .updated { margin-left: auto; font-size: 10px; font-weight: 500; letter-spacing: .4px; text-transform: uppercase; color: var(--ink-faint); }
 
 /* panels */
@@ -151,6 +154,8 @@ td.num a.tx:hover { color: var(--ink); border-bottom-style: solid; }
 }
 @media (max-width: 720px) {
   .top { padding: 0 12px; }
+  .updated { display: none; }
+  .askgpt { padding: 3px 8px; font-size: 10px; }
   .views { margin-left: 4px; }
   .views a { padding: 2px 8px 4px; }
   .panel-head { padding: 10px 12px 8px; }
