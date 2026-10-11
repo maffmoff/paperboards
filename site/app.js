@@ -137,6 +137,27 @@
     return c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress);
   }
 
+  // Average cost per PAPER over a trailing period (−Δ trader pnl ÷ Δ supply), switchable; the choice is
+  // remembered per browser. "Today's cost" is the Mint rate panel's cost to mint now.
+  const COST_KPI = {};
+  const COST_WINDOWS = [["1d", "1D"], ["7d", "7D"], ["30d", "30D"], ["all", "All"]];
+  let costWin = "all";
+  try { const v = localStorage.getItem("paperboards.costWindow"); if (COST_WINDOWS.some(([k]) => k === v)) costWin = v; } catch { /* storage unavailable */ }
+  function costKpi(ws) {
+    const w = ws[costWin], name = COST_WINDOWS.find(([k]) => k === costWin)[1];
+    const label = costWin === "all" ? "avg cost / paper · all-time average" : `avg cost / paper · ${name} average${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
+    const v = w && w.costPerPaper;
+    const value = v == null ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(4)}`;
+    return `<div class="kpi kpi-switch"><span>${esc(label)}</span><b>${esc(value)}</b><div class="seg mini" role="group" aria-label="Averaging period">${COST_WINDOWS.map(([k, n]) => `<button type="button" data-costwin="${k}" class="${k === costWin ? "on" : ""}">${n}</button>`).join("")}</div></div>`;
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-costwin]");
+    if (!b || !state.data) return;
+    costWin = b.dataset.costwin;
+    try { localStorage.setItem("paperboards.costWindow", costWin); } catch { /* storage unavailable */ }
+    renderTape(state.data);
+  });
+
   function renderTape(d) {
     const t = d.totals, p = d.protocol;
     const items = [
@@ -151,22 +172,16 @@
         [`inflation ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.inflation == null ? "–" : `+${pct(p.inflation, 1)}`],
         [`staker rewards ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.rewards == null ? "–" : `$${(p.rewards / 1e6).toFixed(2)}M`],
         ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
-        // Net cost per PAPER minted in each trailing window (−Δtrader pnl ÷ Δsupply); windows longer than the
-        // history show the hours they actually cover. "all" is the cumulative average.
-        ...(p.costWindows ? [["1d", "1D"], ["7d", "7D"], ["30d", "30D"], ["all", "all"]].map(([k, name]) => {
-          const w = p.costWindows[k];
-          const label = `cost / paper · ${name}${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
-          const v = w && w.costPerPaper;
-          return [label, v == null ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(4)}`];
-        }) : [["avg cost / paper · cumulative", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`]]),
+        // One KPI with a 1D / 7D / 30D / All switch: the average net cost per PAPER minted over that period.
+        p.costWindows ? COST_KPI : ["avg cost / paper · all time", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`],
         ...(maxSupply(d.curve) != null ? [
           ["max supply ≈", `${(maxSupply(d.curve) / 1e9).toFixed(2)}B`],
-          ["valuation · cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
+          ["valuation · all-time avg cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
         ] : []),
         ["reward / paper / yr", p.rewardPerPaperYear == null ? "–" : `$${p.rewardPerPaperYear.toFixed(4)}`],
       ] : d.crossCheck && d.crossCheck.apiTrackedPaper18 ? [["paper", paperAmt(d.crossCheck.apiTrackedPaper18)]] : []),
     ];
-    $("tape").innerHTML = items.map(([k, v]) => `<div class="kpi"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
+    $("tape").innerHTML = items.map((it) => (it === COST_KPI ? costKpi(p.costWindows) : `<div class="kpi"><span>${esc(it[0])}</span><b>${esc(it[1])}</b></div>`)).join("");
   }
 
   function entities() {

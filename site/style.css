@@ -71,6 +71,8 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button:hover { background: var(--hover); color: var(--ink); }
 .seg button.on { background: var(--active); color: var(--pos); }
+.seg.mini { margin-top: 4px; align-self: flex-start; border-radius: 5px; }
+.seg.mini button { font-size: 10px; padding: 2px 7px; }
 .minpaper { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--ink-label); white-space: nowrap; }
 .minpaper select { font-size: 11px; font-weight: 600; color: var(--ink); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
 #q { width: 240px; max-width: 100%; font-size: 12px; color: var(--ink); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; outline: none; }
