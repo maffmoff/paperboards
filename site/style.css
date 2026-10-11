@@ -123,7 +123,8 @@ td.num a.tx:hover { color: var(--ink); border-bottom-style: solid; }
 .foot code { font-size: 10.5px; }
 
 /* share cards (card.js) */
-.cardbtn { all: unset; cursor: pointer; margin-left: 8px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: 1px; }
+th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
+.cardbtn { all: unset; cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: 1px; }
 .cardbtn:hover { color: var(--ink); background: var(--hover); }
 .cardmodal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(42, 37, 32, .45); }
 .cardbox { width: min(760px, 100%); max-height: 100%; overflow: auto; background: var(--panel); border-radius: 10px; box-shadow: 0 12px 32px rgba(42, 37, 32, .25); }
@@ -138,15 +139,12 @@ td.num a.tx:hover { color: var(--ink); border-bottom-style: solid; }
 .cardnote { min-height: 16px; margin: 10px 16px 14px; font-size: 11px; color: var(--ink-label); }
 
 /* Columns: 1 # · 2 wallet · 3 balance · 4 paper · 5 share · 6 trade pnl · 7 net pnl · 8 $/paper · 9 rewards
-   · 10 deposited · 11 withdrawn · 12 deposits · 13 largest · 14 first · 15 last */
+   · 10 withdrawn · 11 deposits · 12 largest · 13 first · 14 card (always shown) */
 @media (max-width: 1500px) {
-  th:nth-child(13), td:nth-child(13), th:nth-child(14), td:nth-child(14) { display: none; }
+  th:nth-child(12), td:nth-child(12), th:nth-child(13), td:nth-child(13) { display: none; }
 }
 @media (max-width: 1240px) {
-  th:nth-child(11), td:nth-child(11), th:nth-child(12), td:nth-child(12) { display: none; }
-}
-@media (max-width: 1040px) {
-  th:nth-child(10), td:nth-child(10), th:nth-child(15), td:nth-child(15) { display: none; }
+  th:nth-child(10), td:nth-child(10), th:nth-child(11), td:nth-child(11) { display: none; }
 }
 @media (max-width: 860px) {
   th:nth-child(9), td:nth-child(9), th:nth-child(6), td:nth-child(6) { display: none; }
@@ -161,7 +159,7 @@ td.num a.tx:hover { color: var(--ink); border-bottom-style: solid; }
   .panel-head { padding: 10px 12px 8px; }
   #q { width: 100%; }
   th, td { padding: 4px 8px; }
-  th:nth-child(n+6), td:nth-child(n+6), th:nth-child(3), td:nth-child(3) { display: none; }
+  th:nth-child(n+6):not(.cardcol), td:nth-child(n+6):not(.cardcol), th:nth-child(3), td:nth-child(3) { display: none; }
   .name { display: block; margin: 2px 0 0; }
   .name.hl { display: inline-block; }
   .kpi { padding: 10px 12px; }

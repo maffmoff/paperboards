@@ -207,3 +207,36 @@ export function mintRateAtLp(lp: number, c: CurveParams): number {
 export function stakerSharePct(lp: number, c: Pick<CurveParams, "stakerCap">): number {
   return lp < 0 ? 0 : c.stakerCap > 0 && lp >= c.stakerCap ? 99 : 1;
 }
+
+/**
+ * Protocol activity since genesis (every hourly point, not only since PAPER began): TVL, volume and trades
+ * per interval, cumulative staker rewards, users and cumulative trader pnl. The history's volume, trades,
+ * stakingRewards, users and traderPnl columns are cumulative; per-interval values are their differences.
+ */
+export interface MarketSeries {
+  startMs: number;
+  intervalMs: number;
+  tvl: number[];
+  volumePerInterval: (number | null)[];
+  tradesPerInterval: (number | null)[];
+  stakingRewards: number[];
+  users: number[];
+  traderPnl: number[];
+}
+
+export function marketSeries(h: ProtocolHistory): MarketSeries | null {
+  const c = h.columns, n = (c.tvl ?? []).length;
+  if (n < 2) return null;
+  const col = (k: string) => (c[k] ?? []).slice(0, n).map((v) => (Number.isFinite(v) ? v : 0));
+  const diff = (v: number[]) => v.map((x, i) => (i === 0 ? null : x - v[i - 1]));
+  return {
+    startMs: h.startMs,
+    intervalMs: h.intervalMs,
+    tvl: col("tvl"),
+    volumePerInterval: diff(col("volume")),
+    tradesPerInterval: diff(col("trades")),
+    stakingRewards: col("stakingRewards"),
+    users: col("users"),
+    traderPnl: col("traderPnl"),
+  };
+}

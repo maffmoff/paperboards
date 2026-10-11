@@ -50,6 +50,11 @@
     <div class="charts" id="charts"></div>
   </section>
 
+  <section class="panel" data-page="stats">
+    <div class="panel-head"><h2>Protocol</h2><span class="sub" id="markethint">hourly since genesis · hover a chart to read every metric at that hour</span></div>
+    <div class="charts" id="market"></div>
+  </section>
+
   <section class="panel" data-page="leaderboard">
     <div class="panel-head controls">
       <h2>Leaderboard</h2>
@@ -81,12 +86,11 @@
         <th class="num"><button type="button" data-sort="netPnl" title="trade pnl + staking rewards (claimed + unclaimed)">net pnl</button></th>
         <th class="num"><button type="button" data-sort="cost" title="acquisition cost per PAPER: −pnl ÷ paper">$/paper</button></th>
         <th class="num"><button type="button" data-sort="rewards" title="USDC staking rewards: claimed + unclaimed (PaperStaking)">rewards</button></th>
-        <th class="num"><button type="button" data-sort="deposited">deposited</button></th>
         <th class="num"><button type="button" data-sort="withdrawn">withdrawn</button></th>
         <th class="num"><button type="button" data-sort="count">deposits</button></th>
         <th class="num"><button type="button" data-sort="largest">largest</button></th>
         <th class="num"><button type="button" data-sort="first">first</button></th>
-        <th class="num"><button type="button" data-sort="last">last</button></th>
+        <th class="cardcol" aria-label="share card"></th>
       </tr>
     </thead>
     <tbody id="rows"></tbody>

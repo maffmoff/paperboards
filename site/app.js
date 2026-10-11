@@ -253,8 +253,8 @@
       const rank = state.page * PAGE + i + 1;
       const wd = big(r.withdrawnUsdc) > 0n;
       const who = state.mode === "entities"
-        ? `<td class="ent"><a data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</a><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span><button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button></td>`
-        : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button></td>`;
+        ? `<td class="ent"><a data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</a><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span></td>`
+        : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}</td>`;
       return `<tr>
         <td class="num rank">${rank}</td>
         ${who}
@@ -265,12 +265,11 @@
         ${netPnlCell(r)}
         ${costCell(r)}
         ${rewardsCell(r)}
-        <td class="num dim">${usd(r.depositedUsdc)}</td>
         <td class="num ${wd ? "neg" : "dim"}">${wd ? usd(r.withdrawnUsdc) : "–"}</td>
         <td class="num">${r.depositCount}</td>
         <td class="num">${txLink(r.largestTx, usd(r.largestUsdc))}</td>
         <td class="num dim">${txLink(r.firstTx, when(r.firstTs))}</td>
-        <td class="num dim">${txLink(r.lastTx, when(r.lastTs))}</td>
+        <td class="cardcol">${state.mode === "entities" ? `<button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button>` : `<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button>`}</td>
       </tr>`;
     }).join("");
     $("empty").hidden = rows.length > 0;
@@ -409,6 +408,57 @@
     }
   }
 
+  // One hourly line chart (index-spaced points) with a crosshair; returns the function that shows point i.
+  function seriesChart(fig, vals, timeAt, fmt, onHover) {
+    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv"), n = vals.length;
+    const nums = vals.filter((v) => v != null && Number.isFinite(v));
+    if (nums.length < 2) { cv.textContent = nums.length ? fmt(nums[nums.length - 1]) : "–"; return () => {}; }
+    let lo = Math.min(0, ...nums), hi = Math.max(...nums);
+    if (lo === hi) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
+    const W = Math.max(200, fig.clientWidth), H = 132, L = Math.ceil(Math.max(...ticks.map((t) => fmt(t).length)) * 5.6) + 10, R = 10, T = 8, B = 20;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    const x = (i) => L + (i / (n - 1)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+    let path = "", pen = false;
+    vals.forEach((v, i) => { if (v == null || !Number.isFinite(v)) { pen = false; return; } path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
+    svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(fmt(t))}</text>`).join("")
+      + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
+      + `<path class="line" d="${path}"/><line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
+    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
+    const show = (i) => {
+      const at = i == null ? n - 1 : i, v = vals[at];
+      cv.textContent = v == null || !Number.isFinite(v) ? "–" : fmt(v);
+      if (i == null || v == null || !Number.isFinite(v)) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
+    };
+    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; onHover(Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))))); });
+    hit.addEventListener("mouseleave", () => onHover(null));
+    show(null);
+    return show;
+  }
+
+  // Protocol activity since genesis, hourly: TVL, volume and trades per hour, cumulative staker rewards,
+  // users and cumulative trader pnl (protocol.market from /query/protocol/history).
+  function renderMarket(d) {
+    const m = d.protocol && d.protocol.market, box = $("market");
+    if (!m || m.tvl.length < 2) { box.innerHTML = `<p class="empty">not enough history yet</p>`; return; }
+    const charts = [
+      ["tvl", "TVL", usdShort],
+      ["volumePerInterval", "Volume per hour", usdShort],
+      ["stakingRewards", "Staker rewards, cumulative", usdShort],
+      ["users", "Users", (v) => Math.round(v).toLocaleString("en-US")],
+      ["traderPnl", "Trader PnL, cumulative", usdShort],
+      ["tradesPerInterval", "Trades per hour", (v) => Math.round(v).toLocaleString("en-US")],
+    ];
+    box.innerHTML = charts.map(([k, t]) => `<figure class="chart" data-k="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)} by hour"></svg></figure>`).join("");
+    const timeAt = (i) => m.startMs + i * m.intervalMs, draws = [];
+    const base = "hourly since genesis · hover a chart to read every metric at that hour";
+    const hover = (i) => { draws.forEach((g) => g(i)); $("markethint").textContent = i == null ? base : hourLabel(timeAt(i)); };
+    for (const [k, , fmt] of charts) draws.push(seriesChart(box.querySelector(`[data-k="${k}"]`), m[k], timeAt, fmt, hover));
+  }
+
   // Curves: the rules that turn LP balance and realized losses into PAPER and staker revenue,
   // drawn over their whole range from /query/protocol/summary (definitions as in the official
   // frontend's reward-curve chart and reward-rate tiers; src/depositors/protocol.ts).
@@ -497,12 +547,12 @@
     for (const el of document.querySelectorAll("[data-page]")) el.hidden = el.dataset.page !== view;
     for (const a of document.querySelectorAll(".views a")) a.classList.toggle("on", a.dataset.view === view);
     document.title = `paperboards · ${view}`;
-    if (view === "stats" && state.data) { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); }
+    if (view === "stats" && state.data) { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); }
   }
   window.addEventListener("hashchange", route);
   route();
   let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); } }, 150); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); } }, 150); });
 
   function renderMeta(d) {
     const lines = [
@@ -535,7 +585,7 @@
       return;
     }
     renderTape(state.data);
-    if (location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); }
+    if (location.hash === "#stats") { renderHistory(state.data); renderMint(state.data); renderCurves(state.data); renderMarket(state.data); }
     $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();

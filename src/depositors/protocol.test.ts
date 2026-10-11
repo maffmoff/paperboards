@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { curveParams, mintRateAtLp, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
+import { curveParams, marketSeries, mintRateAtLp, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
 
 const hourly = (values: (i: number) => number, n = 30) => Array.from({ length: n }, (_, i) => values(i));
 const H = 3_600_000;
@@ -127,5 +127,12 @@ describe("periodRates", () => {
     const ppy = (2 / 500) * 365 * 24;
     expect(p["1h"]!.rewardPerPaperYear).toBeCloseTo(ppy);
     expect(p["1h"]!.apr).toBeCloseTo(ppy / (19 / 1900));
+  });
+});
+
+describe("marketSeries", () => {
+  it("keeps every point since genesis and differences the cumulative columns", () => {
+    const m = marketSeries({ startMs: 7, intervalMs: H, columns: { tvl: [1, 2, 3], volume: [0, 10, 30], trades: [0, 1, 4], stakingRewards: [0, 0, 5], users: [1, 2, 2], traderPnl: [0, -1, -3] } })!;
+    expect(m).toMatchObject({ startMs: 7, tvl: [1, 2, 3], volumePerInterval: [null, 10, 20], tradesPerInterval: [null, 1, 3], stakingRewards: [0, 0, 5], users: [1, 2, 2], traderPnl: [0, -1, -3] });
   });
 });
