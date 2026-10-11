@@ -16,7 +16,7 @@ button, input, select { font-family: var(--sans); }
 
 /* top bar */
 .top { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--page); }
-.brand { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+.brand { display: block; line-height: 0; }
 .views { display: flex; gap: 2px; margin-left: 14px; }
 .views a { font-size: 12px; font-weight: 500; color: var(--ink-muted); padding: 2px 12px 4px; border-bottom: 2px solid transparent; }
 .views a:hover { color: var(--ink); }

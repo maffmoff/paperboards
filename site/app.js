@@ -151,7 +151,14 @@
         [`inflation ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.inflation == null ? "–" : `+${pct(p.inflation, 1)}`],
         [`staker rewards ${p.windowHours == null ? "" : `${+p.windowHours.toFixed(1)}h`}`, p.rewards == null ? "–" : `$${(p.rewards / 1e6).toFixed(2)}M`],
         ["apr", p.apr == null ? "–" : pct(p.apr, 0)],
-        ["avg cost / paper · cumulative", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`],
+        // Net cost per PAPER minted in each trailing window (−Δtrader pnl ÷ Δsupply); windows longer than the
+        // history show the hours they actually cover. "all" is the cumulative average.
+        ...(p.costWindows ? [["1d", "1D"], ["7d", "7D"], ["30d", "30D"], ["all", "all"]].map(([k, name]) => {
+          const w = p.costWindows[k];
+          const label = `cost / paper · ${name}${w && w.clamped ? ` (${Math.round(w.hours)}h)` : ""}`;
+          const v = w && w.costPerPaper;
+          return [label, v == null ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(4)}`];
+        }) : [["avg cost / paper · cumulative", p.avgCost == null ? "–" : `$${p.avgCost.toFixed(4)}`]]),
         ...(maxSupply(d.curve) != null ? [
           ["max supply ≈", `${(maxSupply(d.curve) / 1e9).toFixed(2)}B`],
           ["valuation · cost × max supply", p.avgCost == null ? "–" : usdShort(p.avgCost * maxSupply(d.curve))],
@@ -491,7 +498,7 @@
     lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
     lines.push(`share: paper ÷ total paper supply · inflation, staked and reward rate: /query/protocol/history (hourly) over the last 24h, or since paper supply was first recorded if that is shorter (the window is shown); early windows give extreme rates`);
     lines.push(`apr (protocol-wide): (staker rewards over that window ÷ mean staked paper, annualized) ÷ cost per paper, where cost per paper = −cumulative trader pnl ÷ paper supply; history charts evaluate the same definitions at every hour`);
-    lines.push(`cost to mint now: no hedge = 1 ÷ (0.98 × rate); hedged = (1 − win ratio) ÷ (0.98 × rate) for a btc long + short pair opened and closed together at ±target bps, win ratio = (move − 0.2 bps) × 0.9 ÷ (1 + 1/(move·15000) + 1e5/(1e6·move·814.6)) × 0.98 ÷ move (docs' impact model) · avg cost / paper is the cumulative average, −trader pnl ÷ supply, not today's cost`);
+    lines.push(`cost to mint now: no hedge = 1 ÷ (0.98 × rate); hedged = (1 − win ratio) ÷ (0.98 × rate) for a btc long + short pair opened and closed together at ±target bps, win ratio = (move − 0.2 bps) × 0.9 ÷ (1 + 1/(move·15000) + 1e5/(1e6·move·814.6)) × 0.98 ÷ move (docs' impact model) · cost / paper by window = −Δ trader pnl ÷ Δ paper supply over the trailing 1D / 7D / 30D (hourly history; a window longer than the history shows the hours it covers; negative when wins outweighed losses) and "all" = the cumulative average, not today's cost`);
     lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress) from /query/protocol/summary (further dips of lp below the cliff would mint more) · valuation = cost per paper × max supply`);
     lines.push(`$/paper: acquisition cost per paper = −pnl ÷ paper (realized + unrealized); negative = in profit overall`);
     lines.push(`pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split`);

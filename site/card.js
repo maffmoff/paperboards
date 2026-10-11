@@ -61,11 +61,21 @@
     while (t.length > 1 && ctx.measureText(`${t}…`).width > max) t = t.slice(0, -1);
     return `${t}…`;
   }
+  // "paperboards_" like the header SVG: Inter 500, letter-spacing -0.04em (drawn per glyph, since canvas
+  // letterSpacing is not available everywhere), underscore in the positive green.
+  function wordmark(ctx, x, y, size) {
+    ctx.font = `500 ${size}px Inter, system-ui, -apple-system, sans-serif`;
+    const track = -0.04 * size;
+    for (const ch of "paperboards_") {
+      ctx.fillStyle = ch === "_" ? C.pos : C.ink;
+      ctx.fillText(ch, x, y);
+      x += ctx.measureText(ch).width + track;
+    }
+  }
   const loadImage = (src) => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
 
   async function draw(s) {
     await Promise.all(["500 24px Inter", "600 24px Inter", "700 24px Inter"].map((f) => document.fonts.load(f).catch(() => null)));
-    const icon = await loadImage("favicon.svg").catch(() => null);
     const f = figures(s), d = api().data();
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
@@ -75,10 +85,9 @@
     ctx.fillStyle = C.panel; roundRect(ctx, 24, 24, W - 48, H - 48, 24); ctx.fill();
     const L = 72, R = W - 72;
 
-    // Header: mark, name, timestamp.
-    if (icon) ctx.drawImage(icon, L, 62, 52, 52);
-    ctx.fillStyle = C.ink; ctx.font = font(700, 30); ctx.textBaseline = "alphabetic";
-    ctx.fillText("paperboards", L + 66, 98);
+    // Header: the site's wordmark (Inter 500, tracking -0.04em, green underscore) and the timestamp.
+    ctx.textBaseline = "alphabetic";
+    wordmark(ctx, L, 100, 40);
     ctx.fillStyle = C.faint; ctx.font = font(500, 18); ctx.textAlign = "right";
     const asOf = new Date(d.generatedAt).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
     ctx.fillText(`AS OF ${asOf.toUpperCase()}`, R, 96);

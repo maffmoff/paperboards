@@ -27,6 +27,7 @@ import {
 } from "./events.js";
 import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "./rank.js";
 import { curveParams, protocolSeries, protocolStats, type CurveParams, type ProtocolHistory } from "./protocol.js";
+import { costWindows } from "./cost-windows.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
 import { logLine } from "../logging.js";
 import { SUMMARY_LOG_PATH, analyze, mintHeadline, mintSeries, readRecords, sampleOnce } from "../summary-recorder.js";
@@ -233,7 +234,7 @@ async function fetchProtocolStats() {
     if (!res.ok) return null;
     const h = (await res.json()) as ProtocolHistory;
     const stats = protocolStats(h);
-    return stats && { ...stats, series: protocolSeries(h) };
+    return stats && { ...stats, series: protocolSeries(h), costWindows: costWindows(h) };
   } catch (e) {
     console.error(`protocol history unavailable: ${(e as Error).message}`);
     return null;
