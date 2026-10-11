@@ -223,8 +223,8 @@
       const rank = state.page * PAGE + i + 1;
       const wd = big(r.withdrawnUsdc) > 0n;
       const who = state.mode === "entities"
-        ? `<td class="ent"><a data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</a><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span></td>`
-        : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}</td>`;
+        ? `<td class="ent"><a data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</a><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span><button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button></td>`
+        : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button></td>`;
       return `<tr>
         <td class="num rank">${rank}</td>
         ${who}
@@ -562,6 +562,11 @@
   });
   $("prev").addEventListener("click", () => { state.page--; renderTable(); });
   $("next").addEventListener("click", () => { state.page++; renderTable(); });
+  // Hooks for card.js (share cards): read-only access to the loaded data and the formatters, plus a search setter.
+  window.paperboards = {
+    data: () => state.data, entities, labelOf, shareOf, costOf, paperAmt, usd, usd18, pct,
+    search(q) { state.q = q; $("q").value = q; state.page = 0; renderTable(); },
+  };
   load();
   setInterval(load, 60000);
 })();
