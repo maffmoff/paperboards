@@ -147,6 +147,16 @@ describe("periodFlows", () => {
     expect(f["7d"]).toMatchObject({ hours: 29, clamped: true, volume: 290 });
     expect(f.all).toMatchObject({ hours: 29, clamped: false, newUsers: 87 });
   });
+
+  it("ends every period at the last complete hour, not in the hour still in progress", () => {
+    const H = 3_600_000, cum = (step: number) => Array.from({ length: 30 }, (_, i) => (i + 1) * step);
+    const h = { startMs: 0, intervalMs: H, columns: { volume: cum(10), trades: cum(1), traderPnl: cum(-1), stakingRewards: cum(2), paperSupply: cum(100), users: cum(3) } };
+    // 20 minutes into hour 29: the 30th value is a partial reading, so 1h is hour 28 (from value 28 to value 29).
+    const f = periodFlows(h, 29 * H + 20 * 60_000)!;
+    expect(f["1h"]).toMatchObject({ hours: 1, volume: 10, paperMinted: 100 });
+    expect(periodFlows(h)!["1h"]!.volume).toBe(10);
+    expect(periodFlows(h, 29 * H + 20 * 60_000)!["1d"]!.hours).toBe(24);
+  });
 });
 
 describe("openInterestSeries", () => {

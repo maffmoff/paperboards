@@ -39,7 +39,7 @@
     const share = pb.shareOf(r.paper18);
     return {
       paper: pb.paperAmt(r.paper18),
-      share: share == null ? null : pb.pct(share),
+      share: share == null ? null : pb.sharePct(share),
       stats: [
         ["Balance", r.balance18 == null ? "–" : pb.usd18(r.balance18), C.ink],
         ["Net PnL", signed(r.netPnl18), tone(r.netPnl18)],
@@ -147,7 +147,7 @@
     try { await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]); return true; } catch { return false; }
   }
 
-  let dialog = null;
+  let dialog = null, opener = null, drawing = 0;
   function ensureDialog() {
     if (dialog) return dialog;
     dialog = document.createElement("div");
@@ -165,7 +165,7 @@
       <p class="cardnote"></p>
     </div>`;
     document.body.appendChild(dialog);
-    const close = () => { dialog.hidden = true; };
+    const close = () => { dialog.hidden = true; if (opener && opener.isConnected) opener.focus(); };
     dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
     dialog.querySelector(".cardclose").addEventListener("click", close);
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.hidden) close(); });
@@ -176,8 +176,13 @@
     const s = subject(kind, key);
     if (!s) return;
     const dlg = ensureDialog(), note = dlg.querySelector(".cardnote"), img = dlg.querySelector(".cardimg");
-    note.textContent = "drawing…"; img.removeAttribute("src"); dlg.hidden = false;
+    opener = document.activeElement;
+    // Only the latest open() may fill the dialog; the previous image's object URL is released.
+    const mine = ++drawing;
+    note.textContent = "drawing…"; if (img.src.startsWith("blob:")) URL.revokeObjectURL(img.src); img.removeAttribute("src"); dlg.hidden = false;
+    dlg.querySelector(".cardclose").focus();
     const blob = await toBlob(await draw(s));
+    if (mine !== drawing) return;
     img.src = URL.createObjectURL(blob);
     img.alt = `paperboards card for ${s.title}`;
     const f = figures(s), url = linkFor(s.query);
@@ -220,7 +225,8 @@
   // Deep link: #leaderboard?q=<address or name> filters the table once the data has loaded.
   const m = location.hash.match(/^#leaderboard\?q=(.+)$/);
   if (m) {
-    const q = decodeURIComponent(m[1]);
+    let q = m[1];
+    try { q = decodeURIComponent(q); } catch { /* malformed link: use it as typed */ }
     const wait = setInterval(() => {
       if (!api() || !api().data()) return;
       clearInterval(wait);

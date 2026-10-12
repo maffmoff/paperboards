@@ -36,9 +36,19 @@ describe("decodeExchangeLog", () => {
     });
   });
 
-  it("decodes a withdrawal using the 8dp amount (second data word)", () => {
+  it("decodes a withdrawal as the amount debited (first data word, 18dp, rescaled to 8dp)", () => {
     const e = decodeExchangeLog(withdrawLog);
     expect(e).toMatchObject({ kind: "withdraw", user: "0x3642c47881295c1c82b9702e9ba730ba7116ab60", amountUsdc: 1_500_000_000n, block: 48090737 });
+  });
+
+  it("counts the $1 withdrawal fee as withdrawn (debit 51.177942, paid 50.177942; tx 0xde327ffe…)", () => {
+    const e = decodeExchangeLog({ ...withdrawLog, data: `0x${word(51_177_942_000_000_000_000n)}${word(5_017_794_200n)}` });
+    expect(e).toMatchObject({ kind: "withdraw", amountUsdc: 5_117_794_200n });
+  });
+
+  it("reads a deposit whose amount is in the second slot (tx 0xd69904b4…: data 0, 499e6, block)", () => {
+    const e = decodeExchangeLog({ ...depositLog, data: `0x${word(0n)}${word(499_000_000n)}${word(48163781n)}` });
+    expect(e).toMatchObject({ kind: "deposit", amountUsdc: 499_000_000n });
   });
 
   it("ignores other events", () => {

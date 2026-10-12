@@ -10,7 +10,7 @@
   const big = (s) => BigInt(s ?? "0");
   const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
-  let dialog = null;
+  let dialog = null, opener = null;
   function ensureDialog() {
     if (dialog) return dialog;
     dialog = document.createElement("div");
@@ -23,7 +23,7 @@
       <p class="cardnote">pnl chart and trade history: the official read-only portfolio view</p>
     </div>`;
     document.body.appendChild(dialog);
-    const close = () => { dialog.hidden = true; };
+    const close = () => { dialog.hidden = true; if (opener && opener.isConnected) opener.focus(); };
     dialog.addEventListener("click", (e) => { if (e.target === dialog) close(); });
     dialog.querySelector(".cardclose").addEventListener("click", close);
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !dialog.hidden) close(); });
@@ -54,7 +54,7 @@
       line("· unclaimed", api.usd18(r.rewardsPending18 ?? "0")),
       `</div><div class="dgroup"><h3>account</h3>`,
       line("balance", r.balance18 == null ? "–" : api.usd18(r.balance18), "", "account value"),
-      line("paper", api.paperAmt(r.paper18), "", share == null ? "" : `${api.pct(share)} of supply`),
+      line("paper", api.paperAmt(r.paper18), "", share == null ? "" : `${api.sharePct(share)} of supply`),
       line("cost / paper", cost == null ? "–" : `${cost < 0 ? "-" : ""}$${Math.abs(cost).toFixed(4)}`, cost != null && cost < 0 ? "pos" : "", "−trade pnl ÷ paper"),
       line("deposited", api.usd(r.depositedUsdc)),
       line("withdrawn", big(r.withdrawnUsdc) > 0n ? api.usd(r.withdrawnUsdc) : "–"),
@@ -63,7 +63,9 @@
     dlg.querySelector(".dactions").innerHTML = `<a class="primary" href="${OFFICIAL}${r.address}" target="_blank" rel="noopener">PnL chart on papertrade ↗</a>
       <button type="button" class="cardbtn-like" data-card-wallet="${r.address}">Share card</button>
       <a href="${d.explorer}/address/${r.address}" target="_blank" rel="noopener">Explorer ↗</a>`;
+    opener = document.activeElement;
     dlg.hidden = false;
+    dlg.querySelector(".cardclose").focus();
   }
 
   // A wallet row opens the detail: its address link and the row itself (not the card button or other links).

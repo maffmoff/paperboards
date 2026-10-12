@@ -82,10 +82,19 @@ export interface PeriodRates {
 export const PERIODS = { "1h": 1, "1d": 24, "7d": 168, "30d": 720, all: null } as const;
 export type PeriodKey = keyof typeof PERIODS;
 
-/** The overview's period metrics for 1H / 1D / 7D / 30D / all, each over the trailing period ending now. */
-export function periodRates(h: ProtocolHistory): Record<PeriodKey, PeriodRates | null> | null {
+/**
+ * Number of intervals that have ended by asOfMs. The history's last interval is the one in progress: its value is the
+ * reading at fetch time, so a trailing "1h" ending there would cover only the minutes since the top of the hour.
+ * Periods therefore end at the last complete interval. Without asOfMs every interval counts as complete.
+ */
+function completeIntervals(h: ProtocolHistory, n: number, asOfMs: number): number {
+  return Math.max(0, Math.min(n, Math.floor((asOfMs - h.startMs) / h.intervalMs)));
+}
+
+/** The overview's period metrics for 1H / 1D / 7D / 30D / all, each over the trailing period ending at the last complete hour. */
+export function periodRates(h: ProtocolHistory, asOfMs = Infinity): Record<PeriodKey, PeriodRates | null> | null {
   const supply = h.columns.paperSupply ?? [], staked = h.columns.paperStaked ?? [], rewards = h.columns.stakingRewards ?? [], pnl = h.columns.traderPnl ?? [];
-  const n = Math.min(supply.length, staked.length, rewards.length);
+  const n = completeIntervals(h, Math.min(supply.length, staked.length, rewards.length), asOfMs);
   if (n === 0 || h.intervalMs <= 0) return null;
   const last = n - 1;
   let first = 0;
@@ -266,9 +275,9 @@ export interface PeriodFlows {
   newUsers: number;
 }
 
-/** 1H / 1D / 7D / 30D / all flows from the hourly history, counted from the start of the history (genesis). */
-export function periodFlows(h: ProtocolHistory): Record<PeriodKey, PeriodFlows | null> | null {
-  const c = h.columns, n = (c.volume ?? []).length;
+/** 1H / 1D / 7D / 30D / all flows from the hourly history, ending at the last complete hour ("all": from genesis). */
+export function periodFlows(h: ProtocolHistory, asOfMs = Infinity): Record<PeriodKey, PeriodFlows | null> | null {
+  const c = h.columns, n = completeIntervals(h, (c.volume ?? []).length, asOfMs);
   if (n < 2 || h.intervalMs <= 0) return null;
   const last = n - 1, perHour = 3_600_000 / h.intervalMs;
   const at = (k: string, i: number) => { const v = (c[k] ?? [])[i]; return Number.isFinite(v) ? v : 0; };

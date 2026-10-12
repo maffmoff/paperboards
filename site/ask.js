@@ -19,8 +19,12 @@
         const label = clean(k.querySelector("span") && k.querySelector("span").textContent), value = clean(k.querySelector("b") && k.querySelector("b").textContent);
         if (label) lines.push(`- ${label}: ${value}`);
       }
-      for (const f of sec.querySelectorAll(".chart figcaption")) {
-        const label = clean(f.querySelector("span") && f.querySelector("span").textContent), value = clean(f.querySelector("b") && f.querySelector("b").textContent);
+      for (const fig of sec.querySelectorAll(".chart")) {
+        const f = fig.querySelector("figcaption");
+        if (!f) continue;
+        // The caption holds the title, the value beside it and, on Activity charts, a note after it.
+        const label = clean(f.querySelector("span") && f.querySelector("span").textContent);
+        const value = clean([f.querySelector("b"), f.querySelector("em")].map((x) => (x ? x.textContent : "")).join(" "));
         if (label) lines.push(`- chart "${label}": ${value || "–"}`);
       }
       const table = sec.querySelector("#table");
@@ -49,7 +53,8 @@
     const lang = navigator.language || "en";
     const head = `I'm looking at the ${view} page of paperboards (${location.origin}/), a community dashboard for Papertrade, a perpetuals exchange on Hyperliquid's HyperEVM where realized trading losses mint PAPER, a token whose stakers receive USDC from losses. Explain what these numbers mean and what stands out, briefly and concretely. Reply in ${lang}.`;
     let body = `${head}\n\n# On screen\n${screenText()}\n\n# Definitions used by the page\n${definitions()}`;
-    if (body.length > MAX) body = `${body.slice(0, MAX - 20)}\n…(truncated)`;
+    // Cut by code points so a character outside the BMP is never split (encodeURIComponent throws on half a pair).
+    if (body.length > MAX) body = `${Array.from(body).slice(0, MAX - 20).join("")}\n…(truncated)`;
     return body;
   }
 

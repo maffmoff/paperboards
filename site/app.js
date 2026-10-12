@@ -2,7 +2,8 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const PAGE = 50;
-  const state = { data: null, labels: {}, mode: "wallets", sort: "balance", dir: "desc", q: "", page: 0, minPaper: 0n };
+  // entity: set by clicking an entity; lists exactly its wallets (the search box shows its name until edited).
+  const state = { data: null, labels: {}, mode: "wallets", sort: "balance", dir: "desc", q: "", entity: null, page: 0, minPaper: 0n };
 
   // Entity = display name with a trailing counter removed ("paperstrategy12" -> "paperstrategy").
   // Grouping is by name only; wallets without a name are not attributed to anyone.
@@ -27,7 +28,6 @@
   // Each comparator sorts descending; direction is applied on top.
   const SORTERS = {
     wallet: (a, b) => cmp(b.address, a.address),
-    deposited: (a, b) => cmp(big(b.depositedUsdc), big(a.depositedUsdc)),
     withdrawn: (a, b) => cmp(big(b.withdrawnUsdc), big(a.withdrawnUsdc)),
     balance: (a, b) => cmp(big(b.balance18 ?? "0"), big(a.balance18 ?? "0")),
     rewards: (a, b) => cmp(rewardsTotal(b), rewardsTotal(a)),
@@ -37,7 +37,6 @@
     // Compares -pnl/paper exactly by cross-multiplying (paper is positive whenever cost exists).
     share: (a, b) => cmp(big(b.paper18 ?? "0"), big(a.paper18 ?? "0")),
     cost: (a, b) => { const x = costOf(a), y = costOf(b); return x && y ? cmp(y.num * x.den, x.num * y.den) : 0; },
-    last: (a, b) => b.lastBlock - a.lastBlock,
   };
   // Rows without a value for the sorted column stay at the bottom in both directions.
   const MISSING = {
@@ -59,13 +58,6 @@
     return `${neg ? "-" : ""}$${whole}${cents ? "." + frac : ""}`;
   }
   const usd18 = (s) => usd((big(s) / 10000000000n).toString(), false);
-  function compact(s) {
-    const n = Number(big(s) / 100000000n);
-    if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-    if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-    if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
-    return `$${n}`;
-  }
   // PAPER carries 18 decimals (official leaderboard paperTotal).
   function paperAmt(s) {
     if (s == null) return "–";
@@ -83,6 +75,8 @@
     return total && big(total) > 0n ? Number((big(s) * 1000000n) / big(total)) / 1e6 : null;
   }
   const pct = (x, d = 2) => (x == null ? "–" : `${(x * 100).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}%`);
+  // Share as shown everywhere (table, card, detail): tiny non-zero shares read "<0.01%" rather than "0.00%".
+  const sharePct = (x) => (x == null ? "–" : x > 0 && x < 0.00005 ? "<0.01%" : pct(x));
   // Largest single-wallet share, cached per data load; the share bar (shown in v2 only) is scaled to it.
   let topShare = { data: null, x: 1 };
   function topShareOf() {
@@ -95,7 +89,7 @@
   function shareCell(r) {
     const x = shareOf(r.paper18);
     const bar = x == null ? "" : `<span class="sharebar"><i style="width:${Math.min(100, (x / topShareOf()) * 100).toFixed(1)}%"></i></span>`;
-    return `<td class="num ${x == null ? "dim" : ""}" title="share of total PAPER supply">${x == null ? "–" : bar + (x < 0.00005 && x > 0 ? "<0.01%" : pct(x))}</td>`;
+    return `<td class="num ${x == null ? "dim" : ""}" title="share of total PAPER supply">${x == null ? "–" : bar + sharePct(x)}</td>`;
   }
   // Acquisition cost per PAPER = -(realized + unrealized pnl) / paper; both 18 decimals, so the
   // ratio is in dollars. Negative means the wallet is in profit overall. Null without PAPER.
@@ -134,7 +128,8 @@
   // Times are shown in the viewer's local time zone.
   const when = (ts) => (ts == null ? "–" : new Date(ts * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }));
   const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
-  const txLink = (tx, label) => (tx ? `<a class="tx" href="${state.data.explorer}/tx/${tx}" target="_blank" rel="noopener" title="${tx}">${label}</a>` : label);
+  // A malformed share link (e.g. a stray %) must not stop the page: fall back to the raw text.
+  const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   function entities() {
@@ -144,7 +139,7 @@
       if (!key) continue;
       let g = groups.get(key);
       if (!g) {
-        g = { address: key, name: key, wallets: [], depositedUsdc: 0n, withdrawnUsdc: 0n, netUsdc: 0n, depositCount: 0, rewardsClaimed18: 0n, rewardsPending18: 0n, netPnl18: null, claimCount: 0, paper18: null, pnl18: null, realizedPnl18: null, unrealizedPnl18: null, balance18: null, freeBalance18: null, largestUsdc: 0n, firstBlock: Infinity, lastBlock: -Infinity, firstTs: null, lastTs: null, largestTx: null, firstTx: null, lastTx: null };
+        g = { address: key, name: key, wallets: [], depositedUsdc: 0n, withdrawnUsdc: 0n, netUsdc: 0n, depositCount: 0, rewardsClaimed18: 0n, rewardsPending18: 0n, netPnl18: null, claimCount: 0, paper18: null, pnl18: null, realizedPnl18: null, unrealizedPnl18: null, balance18: null, freeBalance18: null };
         groups.set(key, g);
       }
       g.wallets.push(r);
@@ -158,11 +153,8 @@
       g.claimCount += r.claimCount ?? 0;
       if (r.paper18 != null) g.paper18 = (g.paper18 ?? 0n) + big(r.paper18);
       for (const k of ["pnl18", "realizedPnl18", "unrealizedPnl18", "balance18", "freeBalance18"]) if (r[k] != null) g[k] = (g[k] ?? 0n) + big(r[k]);
-      if (big(r.largestUsdc) > g.largestUsdc) { g.largestUsdc = big(r.largestUsdc); g.largestTx = r.largestTx; }
-      if (r.firstBlock < g.firstBlock) { g.firstBlock = r.firstBlock; g.firstTs = r.firstTs; g.firstTx = r.firstTx; }
-      if (r.lastBlock > g.lastBlock) { g.lastBlock = r.lastBlock; g.lastTs = r.lastTs; g.lastTx = r.lastTx; }
     }
-    return [...groups.values()].map((g) => ({ ...g, depositedUsdc: g.depositedUsdc.toString(), withdrawnUsdc: g.withdrawnUsdc.toString(), netUsdc: g.netUsdc.toString(), largestUsdc: g.largestUsdc.toString(), paper18: g.paper18 == null ? null : g.paper18.toString(), pnl18: g.pnl18 == null ? null : g.pnl18.toString(), realizedPnl18: g.realizedPnl18 == null ? null : g.realizedPnl18.toString(), unrealizedPnl18: g.unrealizedPnl18 == null ? null : g.unrealizedPnl18.toString(), balance18: g.balance18 == null ? null : g.balance18.toString(), freeBalance18: g.freeBalance18 == null ? null : g.freeBalance18.toString(), rewardsClaimed18: g.rewardsClaimed18.toString(), rewardsPending18: g.rewardsPending18.toString(), netPnl18: g.netPnl18 == null ? null : g.netPnl18.toString() }));
+    return [...groups.values()].map((g) => ({ ...g, depositedUsdc: g.depositedUsdc.toString(), withdrawnUsdc: g.withdrawnUsdc.toString(), netUsdc: g.netUsdc.toString(), paper18: g.paper18 == null ? null : g.paper18.toString(), pnl18: g.pnl18 == null ? null : g.pnl18.toString(), realizedPnl18: g.realizedPnl18 == null ? null : g.realizedPnl18.toString(), unrealizedPnl18: g.unrealizedPnl18 == null ? null : g.unrealizedPnl18.toString(), balance18: g.balance18 == null ? null : g.balance18.toString(), freeBalance18: g.freeBalance18 == null ? null : g.freeBalance18.toString(), rewardsClaimed18: g.rewardsClaimed18.toString(), rewardsPending18: g.rewardsPending18.toString(), netPnl18: g.netPnl18 == null ? null : g.netPnl18.toString() }));
   }
 
   function matches(r, q) {
@@ -182,7 +174,8 @@
       const sign = state.dir === "asc" ? -1 : 1;
       return [...rows].sort((a, b) => missingCmp(a, b) || sign * SORTERS[state.sort](a, b) || cmp(a.name, b.name));
     }
-    if (q) rows = rows.filter((r) => matches(r, q));
+    if (state.entity) rows = rows.filter((r) => entityOf(labelOf(r)) === state.entity);
+    else if (q) rows = rows.filter((r) => matches(r, q));
     const sign = state.dir === "asc" ? -1 : 1;
     return [...rows].sort((a, b) => missingCmp(a, b) || sign * SORTERS[state.sort](a, b) || a.firstBlock - b.firstBlock || cmp(a.address, b.address));
   }
@@ -198,7 +191,7 @@
       const rank = state.page * PAGE + i + 1;
       const wd = big(r.withdrawnUsdc) > 0n;
       const who = state.mode === "entities"
-        ? `<td class="ent"><a data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</a><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span></td>`
+        ? `<td class="ent"><button type="button" class="entlink" data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</button><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span></td>`
         : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}</td>`;
       return `<tr>
         <td class="num rank">${rank}</td>
@@ -210,7 +203,7 @@
         ${netPnlCell(r)}
         ${costCell(r)}
         ${rewardsCell(r)}
-        <td class="num ${wd ? "neg" : "dim"}">${wd ? usd(r.withdrawnUsdc) : "–"}</td>
+        <td class="num ${wd ? "neg" : "dim"}">${wd ? usd(r.withdrawnUsdc, false) : "–"}</td>
         <td class="cardcol">${state.mode === "entities" ? `<button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button>` : `<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button>`}</td>
       </tr>`;
     }).join("");
@@ -227,41 +220,10 @@
   // Dev fee: the owner-set dev fee recipient's claims of the dev half of trading fees (docs: 2% win fee and
   // 2% LP-side loss fee, half to stakers and half to the dev fee recipient), every claim event since genesis
   // (src/depositors/devfee.ts), plus the live unclaimed accumulator and the recipient's Exchange balance.
-  function lineChart(fig, vals, timeAt, fmt, onHover) {
-    const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv"), n = vals.length;
-    const nums = vals.filter((v) => v != null && Number.isFinite(v));
-    if (nums.length < 2) { cv.textContent = nums.length ? fmt(nums[nums.length - 1]) : "–"; return () => {}; }
-    let lo = Math.min(0, ...nums), hi = Math.max(...nums);
-    if (lo === hi) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1; }
-    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-    const tickText = [lo + pad, (lo + hi) / 2, hi - pad].map((t) => fmt(t));
-    const W = Math.max(220, fig.clientWidth), H = 150, L = Math.ceil(Math.max(...tickText.map((t) => t.length)) * 5.6) + 10, R = 10, T = 8, B = 20;
-    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-    const x = (i) => L + (n === 1 ? 0 : (i / (n - 1)) * (W - L - R)), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
-    let path = "", pen = false;
-    vals.forEach((v, i) => { if (v == null || !Number.isFinite(v)) { pen = false; return; } path += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; });
-    const ticks = [lo + pad, (lo + hi) / 2, hi - pad];
-    svg.innerHTML = ticks.map((t) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}"/><text class="tick" x="${L - 6}" y="${y(t) + 3}" text-anchor="end">${esc(fmt(t))}</text>`).join("")
-      + `<text class="tick" x="${L}" y="${H - 5}">${esc(hourLabel(timeAt(0)))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(hourLabel(timeAt(n - 1)))}</text>`
-      + `<path class="line" d="${path}"/><line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/><rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
-    const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-    const show = (i) => {
-      const at = i == null ? n - 1 : i, v = vals[at];
-      cv.textContent = v == null || !Number.isFinite(v) ? "–" : fmt(v);
-      if (i == null || v == null || !Number.isFinite(v)) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
-      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible"); dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v)); dot.setAttribute("visibility", "visible");
-    };
-    hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; onHover(Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))))); });
-    hit.addEventListener("mouseleave", () => onHover(null));
-    show(null);
-    return show;
-  }
-
   function renderDevFee(d) {
     // The team's fee income: how much has accrued in total (claimed + still unclaimed) and how it grew.
-    const f = d.devFee, kp = $("devfeekpis"), box = $("devfeecharts"), tbl = $("devfeeclaims");
+    const f = d.devFee, kp = $("devfeekpis"), box = $("devfeecharts");
     const baseHint = "the team's half of every trading fee (1% of settled pnl) · accrued = claimed + unclaimed";
-    if (tbl) tbl.innerHTML = "";
     if (!f) { kp.innerHTML = `<div class="kpi"><span>dev fees accrued</span><b>–</b></div>`; box.innerHTML = ""; $("devfeehint").textContent = "not indexed yet"; return; }
     const usdOf = (s18) => (s18 == null ? null : Number(big(s18) / 1000000000000n) / 1e6);
     const money = (v) => (v == null ? "–" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
@@ -271,24 +233,27 @@
     $("devfeehint").textContent = baseHint;
     box.innerHTML = `<figure class="chart"><figcaption><span>Dev fees accrued, cumulative</span><b class="cv"></b></figcaption><svg role="img" aria-label="cumulative dev fees accrued"></svg></figure>`;
     const fig = box.querySelector(".chart");
-    // Preferred: one accrued reading (claimed + unclaimed) per index run, which grows smoothly. Readings are
-    // about 10 minutes apart; the x axis spaces them evenly by reading.
-    const acc = Array.isArray(f.accrued) ? f.accrued.filter((x) => x && Number.isFinite(x.usd)) : [];
-    if (acc.length >= 2) {
-      const draws = [], at = (i) => acc[i].ms;
-      const hover = (i) => { draws.forEach((g) => g(i)); $("devfeehint").textContent = i == null ? baseHint : hourLabel(at(i)); };
-      draws.push(lineChart(fig, acc.map((x) => x.usd), at, money, hover));
-      return;
-    }
-    const s = f.series, n = s ? s.cumulative.length : 0, timeAt = (i) => s.startMs + i * s.intervalMs;
-    if (s && n >= 2) {
-      // Claims arrive in batches; the last point carries what has accrued but is not claimed yet, so the line
-      // ends at the accrued total shown above.
-      const series = s.cumulative.slice();
-      if (accrued != null) series[n - 1] = Math.max(series[n - 1] ?? 0, accrued);
-      const draws = [];
-      const hover = (i) => { draws.forEach((g) => g(i)); $("devfeehint").textContent = i == null ? baseHint : hourLabel(timeAt(i)); };
-      draws.push(lineChart(fig, series, timeAt, money, hover));
+    // Accrued (claimed + unclaimed) is read once per index run, from the first reading on; before it only the claim
+    // events are known, so the line starts with the hourly claimed total and continues with the accrued readings.
+    const acc = Array.isArray(f.accrued) ? f.accrued.filter((x) => x && Number.isFinite(x.usd)).map((x) => [x.ms, x.usd]) : [];
+    const s = f.series, from = acc.length ? acc[0][0] : Infinity;
+    // Each hourly claimed total is the total at the hour's end, so it is plotted there. The line starts at 0 at PAPER's
+    // launch (stats.js HISTORY_START), like every other history on the page; fees accrue from then.
+    const ps = window.paperboardsStats;
+    const claimedPts = s && s.cumulative ? s.cumulative.map((v, i) => [s.startMs + (i + 1) * s.intervalMs, v]).filter(([ms]) => ms < from) : [];
+    const start = ps ? ps.HISTORY_START : null;
+    const first = claimedPts.length ? claimedPts[0][0] : acc.length ? acc[0][0] : null;
+    const pts = [...(start != null && first != null && start < first ? [[start, 0]] : []), ...claimedPts, ...acc];
+    if (!acc.length && pts.length && accrued != null) pts[pts.length - 1] = [pts[pts.length - 1][0], Math.max(pts[pts.length - 1][1] ?? 0, accrued)];
+    if (pts.length >= 2 && ps) {
+      // Next 7 days at the recent accrual pace (6 h central, band from the slowest to the fastest of 3 h / 6 h / 24 h).
+      const proj = ps.linearProjection(pts);
+      const notes = [];
+      if (claimedPts.length && acc.length) notes.push(`before ${hourLabel(from)}: claimed only (the unclaimed amount is read from then on)`);
+      if (proj.pace) notes.push(`next 7 days: dashed at the recent 6 h pace (${money(proj.pace.mid)}/h), band ${money(proj.pace.low)}–${money(proj.pace.high)}/h`);
+      fig.title = notes.join(" · ");
+      let show = null;
+      show = ps.timeChart(fig, pts, money, (t) => show && show(t), { quiet: true, markNow: true, future: proj.future, futureBand: proj.futureBand });
     } else {
       box.querySelector(".cv").textContent = "not enough history yet";
     }
@@ -308,40 +273,51 @@
   route();
   // Share links (card.js, lp.html) open the board filtered: #leaderboard?q=<address or name>.
   const linked = /[?&]q=([^&]*)/.exec(location.hash);
-  if (linked) { state.q = decodeURIComponent(linked[1]); $("q").value = state.q; }
+  if (linked) { state.q = safeDecode(linked[1]); $("q").value = state.q; }
   let resizeTimer = 0;
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderStats(); renderDevFee(state.data); } }, 150); });
 
   function renderMeta(d) {
     const lines = [
-      `source: deposit and withdrawal events of the exchange contract <a href="${d.explorer}/address/${d.exchange}" target="_blank" rel="noopener">${d.exchange}</a> on hyperevm (chain 999)`,
-      `blocks ${d.fromBlock.toLocaleString("en-US")} – ${d.toBlock.toLocaleString("en-US")} · generated ${new Date(d.generatedAt).toLocaleString("en-US", { hour12: false })}`,
-      `amounts are usdc as emitted (8 decimals); times are interpolated from sampled block timestamps`,
+      `source: deposit and withdrawal events of the exchange contract <a href="${d.explorer}/address/${d.exchange}" target="_blank" rel="noopener">${d.exchange}</a> on hyperevm (chain 999), plus the official read-only api (exchange.papertrade.xyz)`,
+      `blocks ${d.fromBlock.toLocaleString("en-US")} – ${d.toBlock.toLocaleString("en-US")} · generated ${new Date(d.generatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} · refreshed about every 10 minutes`,
+      `deposits and withdrawals: usdc as emitted (8 decimals); a withdrawal counts the amount debited, including the withdrawal fee`,
     ];
     if (d.crossCheck && d.crossCheck.apiTrackedBalance18) lines.push(`cross-check: official api tracked balance ${usd18(d.crossCheck.apiTrackedBalance18)} vs net deposits ${usd(d.totals.netUsdc, false)}`);
-    if (d.devFee) lines.push(`dev fee: the dev half of trading fees (docs: 2% win fee and 2% lp-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the exchange (topic 0x8163d4e6…) since genesis, binned hourly; unclaimed = devFeeAccumulator(), balance = the recipient's exchange balance, both read at each index run`);
-    if (d.staking) lines.push(`rewards: usdc from paperstaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via multicall3, read at each index run) · net pnl = trade pnl + rewards`);
     lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
-    lines.push(`share: paper ÷ total paper supply · inflation, staked and reward rate: /query/protocol/history (hourly) over the last 24h, or since paper supply was first recorded if that is shorter (the window is shown); early windows give extreme rates`);
-    lines.push(`apr (protocol-wide): (staker rewards over that window ÷ mean staked paper, annualized) ÷ cost per paper, where cost per paper = −cumulative trader pnl ÷ paper supply; history charts evaluate the same definitions at every hour`);
-    lines.push(`cost to mint now: no hedge = 1 ÷ (0.98 × rate); hedged = (1 − win ratio) ÷ (0.98 × rate) for a btc long + short pair opened and closed together at ±target bps, win ratio = (move − 0.2 bps) × 0.9 ÷ (1 + 1/(move·15000) + 1e5/(1e6·move·814.6)) × 0.98 ÷ move (docs' impact model) · overview period switch (1H / 1D / 7D / 30D / All): inflation = supply growth, staker rewards, reward per staked paper annualized, apr = that ÷ all-time avg cost per paper, avg cost / paper = −Δ trader pnl ÷ Δ supply, all over the trailing period from /query/protocol/history (hourly); a period longer than the minted history shows its real hours · valuation uses the all-time average`);
-    lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress) from /query/protocol/summary (further dips of lp below the cliff would mint more) · valuation = cost per paper × max supply`);
-    lines.push(`$/paper: acquisition cost per paper = −pnl ÷ paper (realized + unrealized); negative = in profit overall`);
-    lines.push(`pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split`);
-    lines.push(`paper: paperTotal per wallet from the official leaderboard api (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there`);
+    lines.push(`paper: paperTotal per wallet from the official leaderboard api (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there · share = paper ÷ total paper supply`);
+    lines.push(`trade pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split · $/paper = −trade pnl ÷ paper (unrealized included; negative = in profit overall)`);
+    if (d.staking) lines.push(`rewards: usdc from paperstaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via multicall3, read at each index run) · net pnl = trade pnl + rewards`);
+    lines.push(`activity: /query/protocol/history (hourly) and /query/house/history (open interest); headline figures cover the last complete hour or 24 h · apr = that window's staker rewards per staked paper, annualized, ÷ all-time average cost per paper (−cumulative trader pnl ÷ supply)`);
+    lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress), from /query/protocol/summary; further dips of the pool below the cliff and liquidations mint more, and the owner can change the parameters`);
+    lines.push(`cost to mint = (1 − win ratio) ÷ (0.98 × mint rate) for a btc long + short pair opened together and closed at ±15 bps; win ratio from the docs' price-impact model · valuation = max supply × today's cost to mint (not a market price)`);
+    lines.push(`counted losses = tail progress: the losses the mint curve has counted; projections extend the recent 6 h pace, band = slowest to fastest of the recent 3 h / 6 h / 24 h; before the 10-minute samples, rebuilt from the hourly paper supply`);
+    if (d.devFee) lines.push(`dev fee: the dev half of trading fees (docs: 2% win fee and 2% lp-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the exchange (topic 0x8163d4e6…) since genesis + the unclaimed devFeeAccumulator(), read at each index run`);
     $("meta").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
   }
 
+  // The data file is ~13 MB. "no-cache" revalidates with the server (ETag / Last-Modified), so an unchanged file
+  // costs a 304, and an unchanged validator skips parsing. One load at a time; polls pause while the tab is hidden.
+  let loading = false, version = null;
   async function load() {
+    if (loading) return;
+    loading = true;
     try {
-      const res = await fetch(`data/ranking.json?t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch("data/ranking.json", { cache: "no-cache" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const v = res.headers.get("etag") || res.headers.get("last-modified");
+      if (state.data && v && v === version) return;
       state.data = await res.json();
-      const lab = await fetch(`labels.json?t=${Date.now()}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
+      version = v;
+      const lab = await fetch("labels.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}));
       state.labels = Object.fromEntries(Object.entries(lab).filter(([k, v]) => k.startsWith("0x") && v && v.name));
     } catch (e) {
-      $("tape").innerHTML = `<div class="kpi"><span>no data yet — run npm run depositors:index</span><b>${esc(e.message)}</b></div>`;
+      // Keep showing the last data on a failed refresh; only say so when there is nothing to show.
+      if (!state.data) { $("empty").hidden = false; $("empty").textContent = "The data could not be loaded. It refreshes every 10 minutes; try again shortly."; }
+      console.error(`ranking.json: ${e.message}`);
       return;
+    } finally {
+      loading = false;
     }
     if (location.hash === "#stats") { renderStats(); renderDevFee(state.data); }
     $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
@@ -349,7 +325,7 @@
     renderTable();
   }
 
-  $("q").addEventListener("input", (e) => { state.q = e.target.value; state.page = 0; renderTable(); });
+  $("q").addEventListener("input", (e) => { state.q = e.target.value; state.entity = null; state.page = 0; renderTable(); });
   $("minpaper").addEventListener("change", (e) => { state.minPaper = BigInt(e.target.value) * 10n ** 18n; state.page = 0; renderTable(); });
   function renderSortMarks() {
     for (const b of document.querySelectorAll("th button[data-sort]")) {
@@ -382,11 +358,12 @@
     $("modehint").textContent = state.mode === "entities" ? "grouped by display name · trailing numbers ignored" : "one row per wallet";
   }
   $("rows").addEventListener("click", (e) => {
-    const a = e.target.closest("a[data-entity]");
+    const a = e.target.closest("[data-entity]");
     if (!a) return;
     state.mode = "wallets";
-    state.q = a.dataset.entity;
-    $("q").value = state.q;
+    state.entity = a.dataset.entity;
+    state.q = "";
+    $("q").value = state.entity;
     state.page = 0;
     for (const x of $("modes").children) x.classList.toggle("on", x.dataset.mode === "wallets");
     renderModeHint();
@@ -396,9 +373,10 @@
   $("next").addEventListener("click", () => { state.page++; renderTable(); });
   // Hooks for card.js (share cards): read-only access to the loaded data and the formatters, plus a search setter.
   window.paperboards = {
-    data: () => state.data, entities, labelOf, shareOf, costOf, paperAmt, usd, usd18, pct,
-    search(q) { state.q = q; $("q").value = q; state.page = 0; renderTable(); },
+    data: () => state.data, entities, labelOf, shareOf, sharePct, costOf, paperAmt, usd, usd18, pct,
+    search(q) { state.q = q; state.entity = null; $("q").value = q; state.page = 0; renderTable(); },
   };
   load();
-  setInterval(load, 60000);
+  setInterval(() => { if (!document.hidden) load(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
 })();

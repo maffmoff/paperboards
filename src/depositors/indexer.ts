@@ -101,8 +101,16 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   throw new Error(`${method}: gave up (${lastError})`);
 }
 
+/**
+ * Bumped when the decoding of stored Exchange events changes; a checkpoint with an older value rescans the Exchange
+ * events from fromBlock once (claims and dev fees are deduplicated, so they are kept).
+ *   2 (2026-10-12): deposits sum both amount slots; withdrawals record the debit including the fee.
+ */
+const EVENTS_VERSION = 2;
+
 export interface Checkpoint {
   version: 1;
+  eventsVersion?: number;
   chainId: 999;
   exchange: Hex;
   fromBlock: number;
@@ -125,12 +133,19 @@ function loadCheckpoint(fromBlock: number): Checkpoint {
   if (existsSync(CHECKPOINT_PATH)) {
     const raw = JSON.parse(readFileSync(CHECKPOINT_PATH, "utf8"));
     if (raw.exchange === EXCHANGE && raw.fromBlock === fromBlock) {
+      if (raw.eventsVersion !== EVENTS_VERSION) {
+        console.error(`checkpoint events decoded by an older version (${raw.eventsVersion ?? 1}): rescanning the exchange events from ${fromBlock}`);
+        raw.events = [];
+        raw.blockTimestamps = [];
+        raw.scannedThrough = fromBlock - 1;
+        raw.eventsVersion = EVENTS_VERSION;
+      }
       // Checkpoints written before claims were tracked start their claim scan at fromBlock.
       return { ...raw, events: raw.events.map(deserializeEvent), claims: (raw.claims ?? []).map(deserializeClaim), claimsThrough: raw.claimsThrough ?? fromBlock - 1, devFees: (raw.devFees ?? []).map(deserializeDevFeeClaim), devFeesThrough: raw.devFeesThrough ?? fromBlock - 1, devFeeSamples: raw.devFeeSamples ?? [] };
     }
     console.error(`checkpoint ignored: exchange/fromBlock differ (${raw.exchange}, ${raw.fromBlock})`);
   }
-  return { version: 1, chainId: 999, exchange: EXCHANGE, fromBlock, scannedThrough: fromBlock - 1, events: [], claims: [], claimsThrough: fromBlock - 1, devFees: [], devFeesThrough: fromBlock - 1, devFeeSamples: [], blockTimestamps: [] };
+  return { version: 1, eventsVersion: EVENTS_VERSION, chainId: 999, exchange: EXCHANGE, fromBlock, scannedThrough: fromBlock - 1, events: [], claims: [], claimsThrough: fromBlock - 1, devFees: [], devFeesThrough: fromBlock - 1, devFeeSamples: [], blockTimestamps: [] };
 }
 
 function writeJsonAtomic(path: string, value: unknown) {
@@ -258,7 +273,7 @@ async function fetchProtocolStats() {
     if (!res.ok) return null;
     const h = (await res.json()) as ProtocolHistory;
     const stats = protocolStats(h);
-    return stats && { ...stats, series: protocolSeries(h), costWindows: costWindows(h), periods: periodRates(h), market: marketSeries(h), flows: periodFlows(h) };
+    return stats && { ...stats, series: protocolSeries(h), costWindows: costWindows(h), periods: periodRates(h, Date.now()), market: marketSeries(h), flows: periodFlows(h, Date.now()) };
   } catch (e) {
     console.error(`protocol history unavailable: ${(e as Error).message}`);
     return null;

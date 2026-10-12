@@ -12,7 +12,10 @@ export type Hex = `0x${string}`;
  * Emitted by the Exchange when a deposit that arrived through the user's
  * DepositProxy is registered.
  *   topics[1] = user, topics[2] = proxy
- *   data      = (amount in USDC with 8 decimals, uint256 0 so far, block number)
+ *   data      = (amount in USDC with 8 decimals, second amount slot, block number)
+ * Almost every deposit fills the first slot and leaves the second 0; a few
+ * (46 of 31,849 by 2026-10-12, e.g. tx 0x47cd4334…) carry the amount in the
+ * second slot with the first 0, and none fill both. The amount is their sum.
  * The 8-decimal scale is HyperCore's USDC scale; it matches the official
  * leaderboard balances (18 decimals) exactly once rescaled.
  */
@@ -21,8 +24,10 @@ export const DEPOSIT_TOPIC: Hex = "0x02d61879cd72906e0951e3a96096407dd2b1f2cd2d0
 /**
  * Emitted by the Exchange when a withdrawToCore is executed.
  *   topics[1] = user
- *   data      = (amount 18dp, amount in USDC with 8 decimals)
- * Both words carry the same amount at different scales.
+ *   data      = (amount debited from the account, 18dp; amount paid out, USDC 8dp)
+ * The payout is the debit less the withdrawal fee, usually $1 (tx 0xde327ffe…:
+ * 51.177942e18 debited, 50.177942e8 paid), sometimes 0. The account balance
+ * moves by the debit, so that is the amount recorded.
  */
 export const WITHDRAW_TOPIC: Hex = "0x95d1a93901f24eeaa294588802f66fa008f9f3741060c9f79e5dab4709de5e75";
 
@@ -79,7 +84,7 @@ export function decodeExchangeLog(log: RawLog): ExchangeEvent | null {
       kind: "deposit",
       user: topicToAddress(log.topics[1]),
       proxy: topicToAddress(log.topics[2]),
-      amountUsdc: words[0],
+      amountUsdc: words[0] + (words[1] ?? 0n),
       block,
       txHash: log.transactionHash,
       logIndex,
@@ -89,7 +94,7 @@ export function decodeExchangeLog(log: RawLog): ExchangeEvent | null {
     return {
       kind: "withdraw",
       user: topicToAddress(log.topics[1]),
-      amountUsdc: words[1],
+      amountUsdc: words[0] / 10n ** 10n, // the 18dp debit at the 8dp scale of every other amount
       block,
       txHash: log.transactionHash,
       logIndex,
