@@ -25,14 +25,14 @@ button, input, select { font-family: var(--sans); }
 .askgpt { all: unset; cursor: pointer; margin-left: auto; font-size: 11px; font-weight: 600; color: var(--ink); padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); white-space: nowrap; }
 .askgpt:hover { background: var(--hover); }
 .askgpt + .updated { margin-left: 14px; }
-.updated { margin-left: auto; font-size: 10px; font-weight: 500; letter-spacing: .4px; text-transform: uppercase; color: var(--ink-faint); }
+.updated { margin-left: auto; font-size: 10px; font-weight: 500; letter-spacing: 0; color: var(--ink-faint); }
 
 /* panels */
 .board { display: grid; gap: 3px; padding: 3px; margin: 0 auto; }
-.panel { background: var(--panel); border-radius: 8px; overflow: hidden; }
+.panel { background: var(--panel); border-radius: 8px; }
 .panel-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-transform: uppercase; }
-.sub { font-size: 10px; font-weight: 500; letter-spacing: .4px; text-transform: uppercase; color: var(--ink-faint); }
+h2 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0; }
+.sub { font-size: 11px; font-weight: 500; color: var(--ink-faint); }
 
 /* overview */
 .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -49,24 +49,24 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .chart figcaption span { font-size: 11px; font-weight: 500; color: var(--ink-label); }
 .chart figcaption b { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
 #rules-curves .chart figcaption, #activity-rows .chart figcaption, #devfeecharts .chart figcaption { justify-content: flex-start; gap: 10px; }
-/* overlay line (cumulative total over per-hour bars): drawn like every other line (.line), its own scale on the right
-   edge, a swatch in the caption */
-.chart figcaption .ocap { display: inline-flex; align-items: center; gap: 5px; font-style: normal; font-size: 12px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.chart figcaption .ocap i { display: inline-block; width: 12px; height: 0; border-top: 2px solid var(--pos); border-radius: 1px; }
+
 .chart svg { display: block; max-width: 100%; }
 .chart .grid { stroke: var(--row); stroke-width: 1; }
 .chart .tick { font-size: 9.5px; fill: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .chart .line { fill: none; stroke: var(--pos); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart .cross { stroke: var(--ink-muted); stroke-width: 1; stroke-dasharray: 2 3; }
+/* hover crosshair: the horizontal line at the point's value, and the axis labels drawn as boxes */
+.chart .crossh { stroke: var(--ink-muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart .axbox { fill: var(--ink-2); }
+.chart .axlabel { font-size: 9.5px; font-weight: 600; fill: var(--panel); font-variant-numeric: tabular-nums; }
 .chart .dot { fill: var(--pos); stroke: var(--panel); stroke-width: 2; }
 .chart .hit { fill: transparent; cursor: crosshair; }
 .charts-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
-.chart .mark { fill: var(--neg); stroke: var(--panel); stroke-width: 2; }
 .chart .vmark { stroke: var(--ink-faint); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart .vmark.warn { stroke: var(--warm); }
 .chart .vmark.pos { stroke: var(--pos); }
-.chart .mlabel { font-size: 9px; fill: var(--ink-muted); text-transform: uppercase; letter-spacing: .3px; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
+.chart .mlabel { font-size: 9.5px; fill: var(--ink-muted); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; stroke-linejoin: round; }
 /* stats.js: the Stats panels follow the window width */
 .kpi em { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .charts.charts-1 { grid-template-columns: minmax(0, 1fr); }
@@ -86,8 +86,15 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button:hover { background: var(--hover); color: var(--ink); }
 .seg button.on { background: var(--active); color: var(--pos); }
-.minpaper { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; color: var(--ink-label); white-space: nowrap; }
-.minpaper select { font-size: 11px; font-weight: 600; color: var(--ink); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.filterbtn { all: unset; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--ink-muted); padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); white-space: nowrap; }
+.filterbtn:hover, .filterbtn.on { color: var(--ink); background: var(--hover); }
+.filterbtn.active { color: var(--pos); border-color: var(--pos); }
+/* range filters: one min–max pair per numeric column, under the controls */
+.filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 8px 16px 10px; border-bottom: 1px solid var(--border); background: var(--raised); }
+.filters label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--ink-label); white-space: nowrap; }
+.filters input { width: 76px; font-size: 11px; font-weight: 600; color: var(--ink); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; outline: none; font-variant-numeric: tabular-nums; }
+.filters input:focus { border-color: var(--ink-muted); }
+.filters input::placeholder { color: var(--ink-faint); font-weight: 500; }
 #q { width: 240px; max-width: 100%; font-size: 12px; color: var(--ink); background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; outline: none; }
 #q::placeholder { color: var(--ink-faint); }
 #q:focus { border-color: var(--ink-muted); }
@@ -97,7 +104,7 @@ h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .65px; text-t
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 4px 14px; text-align: left; white-space: nowrap; }
-th { height: 26px; font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--ink-muted); border-bottom: 1px solid var(--row-head); }
+th { height: 26px; font-size: 11px; font-weight: 600; color: var(--ink-muted); border-bottom: 1px solid var(--row-head); }
 td { height: 25px; font-size: 10.5px; border-bottom: 1px solid var(--row); }
 tbody tr:hover td { background: var(--hover); }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -112,7 +119,7 @@ th button.on.asc::after { content: " ↑"; }
 .addr a { font-weight: 500; font-variant-numeric: tabular-nums; }
 .addr a:hover { text-decoration: underline; }
 .name { margin-left: 8px; font-weight: 600; color: var(--ink-2); }
-.name.hl { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--ink-muted); background: var(--active); border-radius: 4px; padding: 2px 6px; }
+.name.hl { font-size: 10px; font-weight: 600; color: var(--ink-muted); background: var(--active); border-radius: 4px; padding: 2px 6px; }
 .ent { font-weight: 600; }
 .entlink { all: unset; cursor: pointer; font-weight: 600; }
 .entlink:hover { text-decoration: underline; }
@@ -137,7 +144,7 @@ th button.on.asc::after { content: " ↑"; }
 #rows tr:has(td.addr) { cursor: pointer; }
 .detailbox { width: min(560px, 100%); }
 .dbody { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; padding: 8px 16px 4px; }
-.dgroup h3 { margin: 8px 0 4px; font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; color: var(--ink-faint); }
+.dgroup h3 { margin: 8px 0 4px; font-size: 11px; font-weight: 600; color: var(--ink-faint); }
 .drow { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--row); font-size: 12px; }
 .drow span { color: var(--ink-label); display: flex; flex-direction: column; }
 .drow span em { font-style: normal; font-size: 10px; color: var(--ink-faint); }
@@ -152,7 +159,7 @@ th button.on.asc::after { content: " ↑"; }
 
 /* share cards (card.js) */
 th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
-.cardbtn { all: unset; cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: 1px; }
+.cardbtn { all: unset; cursor: pointer; font-size: 10px; font-weight: 600; color: var(--ink-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: 1px; }
 .cardbtn:hover { color: var(--ink); background: var(--hover); }
 .cardmodal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(42, 37, 32, .45); }
 .cardbox { width: min(760px, 100%); max-height: 100%; overflow: auto; background: var(--panel); border-radius: 10px; box-shadow: 0 12px 32px rgba(42, 37, 32, .25); }
@@ -167,10 +174,7 @@ th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
 .cardnote { min-height: 16px; margin: 10px 16px 14px; font-size: 11px; color: var(--ink-label); }
 
 /* Columns: 1 # · 2 wallet · 3 balance · 4 paper · 5 share · 6 trade pnl · 7 net pnl · 8 $/paper · 9 rewards
-   · 10 withdrawn · 11 card (always shown) */
-@media (max-width: 1240px) {
-  th:nth-child(10), td:nth-child(10) { display: none; }
-}
+   · 10 card (always shown) */
 @media (max-width: 860px) {
   th:nth-child(9), td:nth-child(9), th:nth-child(6), td:nth-child(6) { display: none; }
   .hint { display: none; }
@@ -197,6 +201,14 @@ th.cardcol, td.cardcol { width: 1%; text-align: right; padding-left: 4px; }
 
 /* stats page: one column grid for every panel (two chart columns = four tile columns), no panel subtitles */
 section[data-page="stats"] .panel-head .sub { display: none; }
-section[data-page="stats"] .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 720px) { section[data-page="stats"] .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-section[data-page="stats"] .kpis.kpis-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* Now: every current figure on the page (16 tiles), six per row (four, then three, on narrower screens) */
+section[data-page="stats"] .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1040px) { section[data-page="stats"] .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 720px) { section[data-page="stats"] .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* info badge: a small "i" after a label; the explanation shows on hover or focus (no native title popup) */
+.info { all: unset; cursor: help; position: relative; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-left: 5px; border-radius: 50%; border: 1px solid var(--ink-faint); color: var(--ink-faint); font-size: 9px; font-weight: 600; line-height: 1; text-transform: none; letter-spacing: 0; vertical-align: 1px; }
+.info:hover, .info:focus-visible { color: var(--ink); border-color: var(--ink-muted); }
+.info::after { content: attr(data-tip); display: none; position: absolute; left: -1px; top: 18px; z-index: 5; width: max-content; max-width: 300px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); color: var(--ink); font-size: 11px; font-weight: 500; line-height: 1.45; letter-spacing: 0; text-transform: none; white-space: normal; text-align: left; box-shadow: 0 4px 14px rgba(0, 0, 0, .08); }
+.info:hover::after, .info:focus::after { display: block; }
+.info.flip::after { left: auto; right: -1px; }

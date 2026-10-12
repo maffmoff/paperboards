@@ -336,3 +336,54 @@ export function openInterestSeries(h: HouseHistory): OpenInterestSeries | null {
   }
   return out.times.length ? out : null;
 }
+
+/**
+ * A fine history (e.g. /query/protocol/history?interval=1m, which covers the last 24 h) coarsened to `intervalMs`
+ * (e.g. 5 min). Every column is a cumulative total or a level read at the end of its interval, so the coarse value is
+ * the fine value at each coarse boundary; fine intervals in between are dropped. The last coarse interval may end in
+ * the future (the reading in progress), as in the hourly history.
+ */
+export function coarsenHistory(h: ProtocolHistory, intervalMs: number): ProtocolHistory | null {
+  const keys = Object.keys(h.columns ?? {}), n = Math.max(0, ...keys.map((k) => h.columns[k].length));
+  if (!n || h.intervalMs <= 0 || intervalMs % h.intervalMs !== 0) return null;
+  const picked: number[] = [];
+  for (let i = 0; i < n; i++) if ((h.startMs + (i + 1) * h.intervalMs) % intervalMs === 0) picked.push(i);
+  if (picked.length < 2) return null;
+  const columns: Record<string, number[]> = {};
+  for (const k of keys) columns[k] = picked.map((i) => h.columns[k][i]);
+  return { startMs: h.startMs + (picked[0] + 1) * h.intervalMs - intervalMs, intervalMs, columns };
+}
+
+/** Open interest readings kept only at multiples of `intervalMs` (e.g. the 1-minute house history thinned to 5 min). */
+export function thinOpenInterest(s: OpenInterestSeries, intervalMs: number): OpenInterestSeries | null {
+  const keep = s.times.map((t, i) => (t % intervalMs === 0 ? i : -1)).filter((i) => i >= 0);
+  if (!keep.length) return null;
+  const pick = (a: number[]) => keep.map((i) => a[i]);
+  return { times: pick(s.times), btcLong: pick(s.btcLong), btcShort: pick(s.btcShort), ethLong: pick(s.ethLong), ethShort: pick(s.ethShort), total: pick(s.total) };
+}
+
+/** USDC deposited into and withdrawn from the Exchange per interval (on-chain events), as plain USD numbers. */
+export interface CapitalFlows {
+  startMs: number;
+  intervalMs: number;
+  inflow: number[];
+  outflow: number[];
+}
+
+/**
+ * Bins deposit and withdrawal amounts (USDC, 8 decimals as emitted) by their block time, from `startMs` through the
+ * interval containing `nowMs`. `tsOf` maps a block to unix seconds (interpolated from sampled block timestamps).
+ */
+export function capitalFlows(events: { kind: "deposit" | "withdraw"; amountUsdc: bigint; block: number }[], tsOf: (block: number) => number | null, startMs: number, intervalMs: number, nowMs: number): CapitalFlows {
+  const n = Math.max(1, Math.floor((nowMs - startMs) / intervalMs) + 1);
+  const inflow = new Array<number>(n).fill(0), outflow = new Array<number>(n).fill(0);
+  for (const e of events) {
+    const ts = tsOf(e.block);
+    if (ts == null) continue;
+    const i = Math.floor((ts * 1000 - startMs) / intervalMs);
+    if (i < 0 || i >= n) continue;
+    const usd = Number(e.amountUsdc) / 1e8;
+    if (e.kind === "deposit") inflow[i] += usd; else outflow[i] += usd;
+  }
+  return { startMs, intervalMs, inflow, outflow };
+}

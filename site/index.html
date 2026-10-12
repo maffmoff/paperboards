@@ -26,27 +26,26 @@
 
 <main class="board">
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Now</h2><span class="sub">the state at this moment</span></div>
+    <div class="panel-head"><h2>Now</h2><span class="sub">The state at this moment</span></div>
     <div class="kpis" id="now"></div>
   </section>
 
   <section class="panel" data-page="stats">
     <div class="panel-head"><h2>Activity</h2>
       <div class="seg" id="period" role="group" aria-label="Period">
-        <button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button></div>
+        <button type="button" data-period="5m">5M</button><button type="button" data-period="1h">1H</button><button type="button" data-period="1d">1D</button></div>
       <span class="sub" id="activityhint"></span></div>
     <div class="charts charts-2" id="activity-rows"></div>
   </section>
 
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Rules</h2><span class="sub">fixed protocol parameters and the curves they define · hover to read</span></div>
+    <div class="panel-head"><h2>Rules</h2><span class="sub">Fixed protocol parameters and the curves they define · hover to read</span></div>
     <div class="charts charts-2" id="rules-curves"></div>
   </section>
 
   <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Dev fee</h2><span class="sub" id="devfeehint">the team's half of every trading fee (1% of settled pnl) · claim events on the exchange</span></div>
-    <div class="kpis" id="devfeekpis"></div>
-    <div class="charts charts-1" id="devfeecharts"></div>
+    <div class="panel-head"><h2>Dev fee</h2><span class="sub" id="devfeehint">The team's half of every trading fee (1% of settled pnl) · claim events on the exchange</span></div>
+    <div class="charts charts-2" id="devfeecharts"></div>
   </section>
 
   <section class="panel" data-page="leaderboard">
@@ -56,31 +55,34 @@
         <button type="button" data-mode="wallets" class="on" title="one row per wallet address">Wallets</button>
         <button type="button" data-mode="entities" title="wallets grouped by display name (papertrade, else hyperliquid), e.g. paperstrategy1…72 → paperstrategy">Entities</button>
       </div>
-      <label class="minpaper">Min PAPER
-        <select id="minpaper" aria-label="Minimum PAPER held">
-          <option value="0">All</option>
-          <option value="100000">100K</option>
-          <option value="1000000">1M</option>
-          <option value="10000000">10M</option>
-        </select>
-      </label>
       <input id="q" type="search" placeholder="Search wallet or name" autocomplete="off" spellcheck="false" aria-label="Search">
-      <span class="sub hint" id="modehint">one row per wallet</span>
+      <button type="button" id="filtertoggle" class="filterbtn" aria-expanded="false" aria-controls="filters">Filters</button>
+      <span class="sub hint" id="modehint">One row per wallet</span>
+    </div>
+    <!-- One min / max pair per numeric column; empty = no bound. Share in %, $/paper in dollars, the rest in dollars or PAPER. -->
+    <div class="filters" id="filters" hidden>
+      <label>Balance <input type="number" data-f="balance" data-b="min" placeholder="min"> – <input type="number" data-f="balance" data-b="max" placeholder="max"></label>
+      <label>PAPER <input type="number" data-f="paper" data-b="min" placeholder="min"> – <input type="number" data-f="paper" data-b="max" placeholder="max"></label>
+      <label>Share % <input type="number" data-f="share" data-b="min" placeholder="min" step="0.01"> – <input type="number" data-f="share" data-b="max" placeholder="max" step="0.01"></label>
+      <label>Trade PnL <input type="number" data-f="pnl" data-b="min" placeholder="min"> – <input type="number" data-f="pnl" data-b="max" placeholder="max"></label>
+      <label>Net PnL <input type="number" data-f="netPnl" data-b="min" placeholder="min"> – <input type="number" data-f="netPnl" data-b="max" placeholder="max"></label>
+      <label>$/PAPER <input type="number" data-f="cost" data-b="min" placeholder="min" step="0.0001"> – <input type="number" data-f="cost" data-b="max" placeholder="max" step="0.0001"></label>
+      <label>Rewards <input type="number" data-f="rewards" data-b="min" placeholder="min"> – <input type="number" data-f="rewards" data-b="max" placeholder="max"></label>
+      <button type="button" id="filterclear" class="filterbtn">Clear</button>
     </div>
     <div class="table-wrap">
   <table id="table">
     <thead>
       <tr>
         <th class="num">#</th>
-        <th><button type="button" data-sort="wallet" id="th-wallet">wallet</button></th>
-        <th class="num"><button type="button" data-sort="balance" title="account value: deposited − withdrawn + pnl + rewards claimed (matches the official portfolio equity)">balance</button></th>
-        <th class="num"><button type="button" data-sort="paper" title="PAPER held, from the official leaderboard">paper</button></th>
-        <th class="num"><button type="button" data-sort="share" title="share of total PAPER supply">share</button></th>
-        <th class="num"><button type="button" data-sort="pnl" title="trade pnl: realized + unrealized, from the official leaderboard">trade pnl</button></th>
-        <th class="num"><button type="button" data-sort="netPnl" title="trade pnl + staking rewards (claimed + unclaimed)">net pnl</button></th>
-        <th class="num"><button type="button" data-sort="cost" title="acquisition cost per PAPER: −pnl ÷ paper">$/paper</button></th>
-        <th class="num"><button type="button" data-sort="rewards" title="USDC staking rewards: claimed + unclaimed (PaperStaking)">rewards</button></th>
-        <th class="num"><button type="button" data-sort="withdrawn">withdrawn</button></th>
+        <th><button type="button" data-sort="wallet" id="th-wallet">Wallet</button></th>
+        <th class="num"><button type="button" data-sort="balance">Balance</button><button type="button" class="info" data-tip="Account value: deposited − withdrawn + PnL + rewards claimed (matches the official portfolio equity)" aria-label="About Balance">i</button></th>
+        <th class="num"><button type="button" data-sort="paper">PAPER</button><button type="button" class="info" data-tip="PAPER held, from the official leaderboard" aria-label="About PAPER">i</button></th>
+        <th class="num"><button type="button" data-sort="share">Share</button><button type="button" class="info" data-tip="Share of total PAPER supply" aria-label="About Share">i</button></th>
+        <th class="num"><button type="button" data-sort="pnl">Trade PnL</button><button type="button" class="info" data-tip="Trade PnL: realized + unrealized, from the official leaderboard" aria-label="About Trade PnL">i</button></th>
+        <th class="num"><button type="button" data-sort="netPnl">Net PnL</button><button type="button" class="info" data-tip="Trade PnL + staking rewards (claimed + unclaimed)" aria-label="About Net PnL">i</button></th>
+        <th class="num"><button type="button" data-sort="cost">$/PAPER</button><button type="button" class="info" data-tip="Acquisition cost per PAPER: −PnL ÷ PAPER" aria-label="About $/PAPER">i</button></th>
+        <th class="num"><button type="button" data-sort="rewards">Rewards</button><button type="button" class="info" data-tip="USDC staking rewards: claimed + unclaimed (PaperStaking)" aria-label="About Rewards">i</button></th>
         <th class="cardcol" aria-label="share card"></th>
       </tr>
     </thead>

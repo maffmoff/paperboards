@@ -3,7 +3,8 @@
   const $ = (id) => document.getElementById(id);
   const PAGE = 50;
   // entity: set by clicking an entity; lists exactly its wallets (the search box shows its name until edited).
-  const state = { data: null, labels: {}, mode: "wallets", sort: "balance", dir: "desc", q: "", entity: null, page: 0, minPaper: 0n };
+  // ranges: column -> { min, max } in display units (dollars, PAPER, % of supply), from the filter row; empty = no bound.
+  const state = { data: null, labels: {}, mode: "wallets", sort: "balance", dir: "desc", q: "", entity: null, page: 0, ranges: {} };
 
   // Entity = display name with a trailing counter removed ("paperstrategy12" -> "paperstrategy").
   // Grouping is by name only; wallets without a name are not attributed to anyone.
@@ -28,7 +29,6 @@
   // Each comparator sorts descending; direction is applied on top.
   const SORTERS = {
     wallet: (a, b) => cmp(b.address, a.address),
-    withdrawn: (a, b) => cmp(big(b.withdrawnUsdc), big(a.withdrawnUsdc)),
     balance: (a, b) => cmp(big(b.balance18 ?? "0"), big(a.balance18 ?? "0")),
     rewards: (a, b) => cmp(rewardsTotal(b), rewardsTotal(a)),
     netPnl: (a, b) => cmp(big(b.netPnl18 ?? "0"), big(a.netPnl18 ?? "0")),
@@ -163,12 +163,30 @@
 
   const missingCmp = (a, b) => (MISSING[state.sort] ? MISSING[state.sort](a) - MISSING[state.sort](b) : 0);
 
-  // Minimum PAPER filter; applies to the wallet row, or to the entity's summed PAPER.
-  const enough = (r) => state.minPaper === 0n || (r.paper18 != null && big(r.paper18) >= state.minPaper);
+  // Each numeric column as a plain number in its display units, for the range filters (null = no value, which fails
+  // any bound set on that column). Works on wallet rows and on entity rows alike, since both carry the same fields.
+  const n18 = (s) => (s == null ? null : Number(big(s) / 10n ** 12n) / 1e6);
+  const COLUMN_VALUE = {
+    balance: (r) => n18(r.balance18),
+    paper: (r) => n18(r.paper18),
+    share: (r) => { const x = shareOf(r.paper18); return x == null ? null : x * 100; },
+    pnl: (r) => n18(r.pnl18),
+    netPnl: (r) => n18(r.netPnl18),
+    cost: (r) => { const c = costOf(r); return c ? Number((c.num * 100000000n) / c.den) / 1e8 : null; },
+    rewards: (r) => (r.rewardsClaimed18 == null && r.rewardsPending18 == null ? null : n18(rewardsTotal(r).toString())),
+  };
+  const inRange = (r) => {
+    for (const [k, b] of Object.entries(state.ranges)) {
+      if (b.min == null && b.max == null) continue;
+      const v = COLUMN_VALUE[k](r);
+      if (v == null || (b.min != null && v < b.min) || (b.max != null && v > b.max)) return false;
+    }
+    return true;
+  };
 
   function filtered() {
     const q = state.q.trim().toLowerCase();
-    let rows = (state.mode === "entities" ? entities() : state.data.rows).filter(enough);
+    let rows = (state.mode === "entities" ? entities() : state.data.rows).filter(inRange);
     if (state.mode === "entities") {
       if (q) rows = rows.filter((g) => g.name.includes(q) || g.wallets.some((r) => r.address.includes(q)));
       const sign = state.dir === "asc" ? -1 : 1;
@@ -186,10 +204,9 @@
     state.page = Math.min(state.page, pages - 1);
     const slice = rows.slice(state.page * PAGE, (state.page + 1) * PAGE);
     const ex = state.data.explorer;
-    $("th-wallet").textContent = state.mode === "entities" ? "entity" : "wallet";
+    $("th-wallet").textContent = state.mode === "entities" ? "Entity" : "Wallet";
     $("rows").innerHTML = slice.map((r, i) => {
       const rank = state.page * PAGE + i + 1;
-      const wd = big(r.withdrawnUsdc) > 0n;
       const who = state.mode === "entities"
         ? `<td class="ent"><button type="button" class="entlink" data-entity="${esc(r.name)}" title="show wallets">${esc(r.name)}</button><span class="n">${r.wallets.length} wallet${r.wallets.length === 1 ? "" : "s"}</span></td>`
         : `<td class="addr"><a href="${ex}/address/${r.address}" target="_blank" rel="noopener" title="${r.address}">${short(r.address)}</a>${nameCells(r)}</td>`;
@@ -203,8 +220,7 @@
         ${netPnlCell(r)}
         ${costCell(r)}
         ${rewardsCell(r)}
-        <td class="num ${wd ? "neg" : "dim"}">${wd ? usd(r.withdrawnUsdc, false) : "–"}</td>
-        <td class="cardcol">${state.mode === "entities" ? `<button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">card</button>` : `<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">card</button>`}</td>
+        <td class="cardcol">${state.mode === "entities" ? `<button type="button" class="cardbtn" data-card-entity="${esc(r.name)}" title="share card">Card</button>` : `<button type="button" class="cardbtn" data-card-wallet="${r.address}" title="share card">Card</button>`}</td>
       </tr>`;
     }).join("");
     $("empty").hidden = rows.length > 0;
@@ -222,14 +238,13 @@
   // (src/depositors/devfee.ts), plus the live unclaimed accumulator and the recipient's Exchange balance.
   function renderDevFee(d) {
     // The team's fee income: how much has accrued in total (claimed + still unclaimed) and how it grew.
-    const f = d.devFee, kp = $("devfeekpis"), box = $("devfeecharts");
-    const baseHint = "the team's half of every trading fee (1% of settled pnl) · accrued = claimed + unclaimed";
-    if (!f) { kp.innerHTML = `<div class="kpi"><span>dev fees accrued</span><b>–</b></div>`; box.innerHTML = ""; $("devfeehint").textContent = "not indexed yet"; return; }
+    const f = d.devFee, box = $("devfeecharts");
+    const baseHint = "The team's half of every trading fee (1% of settled pnl) · accrued = claimed + unclaimed";
+    if (!f) { box.innerHTML = ""; $("devfeehint").textContent = "not indexed yet"; return; }
     const usdOf = (s18) => (s18 == null ? null : Number(big(s18) / 1000000000000n) / 1e6);
     const money = (v) => (v == null ? "–" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
     const claimed = usdOf(f.claimedTotal18), unclaimed = usdOf(f.unclaimed18);
     const accrued = claimed == null ? null : claimed + (unclaimed ?? 0);
-    kp.innerHTML = `<div class="kpi"><span>dev fees accrued · all time</span><b>${esc(money(accrued))}</b></div>`;
     $("devfeehint").textContent = baseHint;
     box.innerHTML = `<figure class="chart"><figcaption><span>Dev fees accrued, cumulative</span><b class="cv"></b></figcaption><svg role="img" aria-label="cumulative dev fees accrued"></svg></figure>`;
     const fig = box.querySelector(".chart");
@@ -246,14 +261,14 @@
     const pts = [...(start != null && first != null && start < first ? [[start, 0]] : []), ...claimedPts, ...acc];
     if (!acc.length && pts.length && accrued != null) pts[pts.length - 1] = [pts[pts.length - 1][0], Math.max(pts[pts.length - 1][1] ?? 0, accrued)];
     if (pts.length >= 2 && ps) {
-      // Next 7 days at the recent accrual pace (6 h central, band from the slowest to the fastest of 3 h / 6 h / 24 h).
-      const proj = ps.linearProjection(pts);
+      // The Rules horizon ahead at the recent accrual pace (median hourly increase over the last 24 h, band = its 25th–75th percentile).
+      const hz = ps.horizon(), proj = ps.linearProjection(pts, hz.days);
       const notes = [];
       if (claimedPts.length && acc.length) notes.push(`before ${hourLabel(from)}: claimed only (the unclaimed amount is read from then on)`);
-      if (proj.pace) notes.push(`next 7 days: dashed at the recent 6 h pace (${money(proj.pace.mid)}/h), band ${money(proj.pace.low)}–${money(proj.pace.high)}/h`);
-      fig.title = notes.join(" · ");
+      if (proj.pace) notes.push(`next ${hz.days} days, if fees keep accruing as in the last 24 h: dashed at the median hourly pace (${money(proj.pace.mid)}/h), band = the 25th–75th percentile of those hours (${money(proj.pace.low)}–${money(proj.pace.high)}/h)`);
+      ps.setInfo(fig, notes.join(" · "));
       let show = null;
-      show = ps.timeChart(fig, pts, money, (t) => show && show(t), { quiet: true, markNow: true, future: proj.future, futureBand: proj.futureBand });
+      show = ps.timeChart(fig, pts, money, (t) => show && show(t), { quiet: true, timeLabel: hz.timeLabel, future: proj.future, futureBand: proj.futureBand });
     } else {
       box.querySelector(".cv").textContent = "not enough history yet";
     }
@@ -279,20 +294,20 @@
 
   function renderMeta(d) {
     const lines = [
-      `source: deposit and withdrawal events of the exchange contract <a href="${d.explorer}/address/${d.exchange}" target="_blank" rel="noopener">${d.exchange}</a> on hyperevm (chain 999), plus the official read-only api (exchange.papertrade.xyz)`,
-      `blocks ${d.fromBlock.toLocaleString("en-US")} – ${d.toBlock.toLocaleString("en-US")} · generated ${new Date(d.generatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} · refreshed about every 10 minutes`,
-      `deposits and withdrawals: usdc as emitted (8 decimals); a withdrawal counts the amount debited, including the withdrawal fee`,
+      `Source: deposit and withdrawal events of the Exchange contract <a href="${d.explorer}/address/${d.exchange}" target="_blank" rel="noopener">${d.exchange}</a> on HyperEVM (chain 999), plus the official read-only API (exchange.papertrade.xyz)`,
+      `Blocks ${d.fromBlock.toLocaleString("en-US")} – ${d.toBlock.toLocaleString("en-US")} · generated ${new Date(d.generatedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} · refreshed about every 10 minutes`,
+      `Deposits and withdrawals: USDC as emitted (8 decimals); a withdrawal counts the amount debited, including the withdrawal fee`,
     ];
-    if (d.crossCheck && d.crossCheck.apiTrackedBalance18) lines.push(`cross-check: official api tracked balance ${usd18(d.crossCheck.apiTrackedBalance18)} vs net deposits ${usd(d.totals.netUsdc, false)}`);
-    lines.push(`balance: account value = deposited − withdrawn + pnl (realized + unrealized) + rewards claimed; matches the official portfolio equity. hover for free balance and margin in positions`);
-    lines.push(`paper: paperTotal per wallet from the official leaderboard api (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there · share = paper ÷ total paper supply`);
-    lines.push(`trade pnl: totalWindowedPnl (realized + unrealized) per wallet from the same api; hover a value for the split · $/paper = −trade pnl ÷ paper (unrealized included; negative = in profit overall)`);
-    if (d.staking) lines.push(`rewards: usdc from paperstaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via multicall3, read at each index run) · net pnl = trade pnl + rewards`);
-    lines.push(`activity: /query/protocol/history (hourly) and /query/house/history (open interest); headline figures cover the last complete hour or 24 h · apr = that window's staker rewards per staked paper, annualized, ÷ all-time average cost per paper (−cumulative trader pnl ÷ supply)`);
-    lines.push(`max supply ≈ current supply + flat × D² ÷ (D + tail progress), from /query/protocol/summary; further dips of the pool below the cliff and liquidations mint more, and the owner can change the parameters`);
-    lines.push(`cost to mint = (1 − win ratio) ÷ (0.98 × mint rate) for a btc long + short pair opened together and closed at ±15 bps; win ratio from the docs' price-impact model · valuation = max supply × today's cost to mint (not a market price)`);
-    lines.push(`counted losses = tail progress: the losses the mint curve has counted; projections extend the recent 6 h pace, band = slowest to fastest of the recent 3 h / 6 h / 24 h; before the 10-minute samples, rebuilt from the hourly paper supply`);
-    if (d.devFee) lines.push(`dev fee: the dev half of trading fees (docs: 2% win fee and 2% lp-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the exchange (topic 0x8163d4e6…) since genesis + the unclaimed devFeeAccumulator(), read at each index run`);
+    if (d.crossCheck && d.crossCheck.apiTrackedBalance18) lines.push(`Cross-check: official API tracked balance ${usd18(d.crossCheck.apiTrackedBalance18)} vs net deposits ${usd(d.totals.netUsdc, false)}`);
+    lines.push(`Balance: account value = deposited − withdrawn + PnL (realized + unrealized) + rewards claimed; matches the official portfolio equity. Hover for free balance and margin in positions`);
+    lines.push(`PAPER: paperTotal per wallet from the official leaderboard API (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there · Share = PAPER ÷ total PAPER supply`);
+    lines.push(`Trade PnL: totalWindowedPnl (realized + unrealized) per wallet from the same API; hover a value for the split · $/PAPER = −trade PnL ÷ PAPER (unrealized included; negative = in profit overall)`);
+    if (d.staking) lines.push(`Rewards: USDC from PaperStaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via Multicall3, read at each index run) · Net PnL = trade PnL + rewards`);
+    lines.push(`Activity: /query/protocol/history (hourly; 1-minute for the last 24 h, shown at 5 min) and /query/house/history (open interest) · TVL bars = deposits and withdrawals per bucket from the Exchange events · Open interest bars = notional opened (up) and closed (down) per bucket, derived as (volume ± Δopen interest) ÷ 2 · Net exposure = (long − short) ÷ (long + short) of open interest · APR = the last complete 24 h's staker rewards per staked PAPER, annualized, ÷ the all-time average cost per PAPER (−cumulative trader PnL ÷ supply)`);
+    lines.push(`Max supply ≈ current supply + flat × D² ÷ (D + tail progress), from /query/protocol/summary; further dips of the pool below the cliff and liquidations mint more, and the owner can change the parameters`);
+    lines.push(`Cost to mint = (1 − win ratio) ÷ (0.98 × mint rate) for a BTC long + short pair opened together and closed at ±15 bps; win ratio from the docs' price-impact model · Valuation = max supply × today's cost to mint (not a market price)`);
+    lines.push(`Counted losses = tail progress: the losses the mint curve has counted; projections assume volume and the loss rate stay as they are: the median hourly pace over the last 24 h, band = the 25th–75th percentile of those hours; before the 10-minute samples, rebuilt from the hourly PAPER supply`);
+    if (d.devFee) lines.push(`Dev fee: the dev half of trading fees (docs: 2% win fee and 2% LP-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the Exchange (topic 0x8163d4e6…) since genesis + the unclaimed devFeeAccumulator(), read at each index run`);
     $("meta").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
   }
 
@@ -320,13 +335,23 @@
       loading = false;
     }
     if (location.hash === "#stats") { renderStats(); renderDevFee(state.data); }
-    $("updated").textContent = `updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
+    $("updated").textContent = `Updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();
   }
 
   $("q").addEventListener("input", (e) => { state.q = e.target.value; state.entity = null; state.page = 0; renderTable(); });
-  $("minpaper").addEventListener("change", (e) => { state.minPaper = BigInt(e.target.value) * 10n ** 18n; state.page = 0; renderTable(); });
+  // Filter row: open/close, read every bound on input, clear.
+  $("filtertoggle").addEventListener("click", () => { const f = $("filters"), open = f.hidden; f.hidden = !open; $("filtertoggle").setAttribute("aria-expanded", String(open)); $("filtertoggle").classList.toggle("on", open); });
+  const readRanges = () => {
+    const out = {};
+    for (const inp of document.querySelectorAll("#filters input[data-f]")) { const v = inp.value.trim() === "" ? null : Number(inp.value); if (v == null || !Number.isFinite(v)) continue; (out[inp.dataset.f] ??= { min: null, max: null })[inp.dataset.b] = v; }
+    state.ranges = out; state.page = 0;
+    $("filtertoggle").classList.toggle("active", Object.keys(out).length > 0);
+    renderTable();
+  };
+  $("filters").addEventListener("input", readRanges);
+  $("filterclear").addEventListener("click", () => { for (const inp of document.querySelectorAll("#filters input[data-f]")) inp.value = ""; readRanges(); });
   function renderSortMarks() {
     for (const b of document.querySelectorAll("th button[data-sort]")) {
       const on = b.dataset.sort === state.sort;
@@ -355,7 +380,7 @@
     renderTable();
   });
   function renderModeHint() {
-    $("modehint").textContent = state.mode === "entities" ? "grouped by display name · trailing numbers ignored" : "one row per wallet";
+    $("modehint").textContent = state.mode === "entities" ? "Grouped by display name · trailing numbers ignored" : "One row per wallet";
   }
   $("rows").addEventListener("click", (e) => {
     const a = e.target.closest("[data-entity]");
@@ -376,6 +401,11 @@
     data: () => state.data, entities, labelOf, shareOf, sharePct, costOf, paperAmt, usd, usd18, pct,
     search(q) { state.q = q; state.entity = null; $("q").value = q; state.page = 0; renderTable(); },
   };
+  // The Rules horizon switch (stats.js) also sets how far the dev-fee chart projects.
+  document.addEventListener("paperboards:horizon", () => { if (state.data && location.hash === "#stats") renderDevFee(state.data); });
+  // Info badges: an explanation near the right edge opens to the left so it stays on screen.
+  document.addEventListener("mouseover", (e) => { const b = e.target.closest(".info"); if (b) b.classList.toggle("flip", b.getBoundingClientRect().left > innerWidth * 0.6); });
+  document.addEventListener("focusin", (e) => { const b = e.target.closest(".info"); if (b) b.classList.toggle("flip", b.getBoundingClientRect().left > innerWidth * 0.6); });
   load();
   setInterval(() => { if (!document.hidden) load(); }, 60000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });

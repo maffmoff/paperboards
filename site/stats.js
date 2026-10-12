@@ -19,30 +19,64 @@
   const paper = (v) => (v == null ? "–" : v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : count(v));
   const pct = (x, d = 1) => (x == null || !Number.isFinite(x) ? "–" : `${(x * 100).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d })}%`);
   // Per-PAPER dollar amounts: 3 significant figures below $1 ($0.00721), cents above.
-  const unit = (v) => (v == null || !Number.isFinite(v) ? "–" : `${v < 0 ? "-" : ""}$${Math.abs(v) >= 1 || v === 0 ? Math.abs(v).toFixed(v === 0 ? 4 : 2) : Math.abs(v).toPrecision(3)}`);
+  const unit = (v) => (v == null || !Number.isFinite(v) ? "–" : v === 0 ? "$0" : `${v < 0 ? "-" : ""}$${Math.abs(v) >= 1 ? Math.abs(v).toFixed(2) : Math.abs(v).toPrecision(3)}`);
+  // Axis formats shared by the Rules charts: rate per $, PAPER in billions, and percentages compacted past 10,000%.
+  const rateFmt = (v) => (v === 0 ? "0/$" : `${v.toFixed(1)}/$`);
+  const supplyFmt = (v) => (v === 0 ? "0" : `${(v / 1e9).toFixed(2)}B`);
+  const bigPct = (v) => { const p = v * 100; return p >= 1e6 ? `${+(p / 1e6).toFixed(1)}M%` : p >= 1e4 ? `${Math.round(p / 1e3)}K%` : pct(v, p < 10 ? 1 : 0); };
   // Every history on the page starts at PAPER's launch, 2026-10-10 22:00 SGT (14:00 UTC); labels show the viewer's
   // local time.
   const HISTORY_START = Date.UTC(2026, 9, 10, 14);
+  // Every full chart shares one frame, so plots line up down each column and across the grid: the same height, the same
+  // left margin (value axis) and right margin (second axis, kept even on charts without one), the same top and bottom.
+  const FRAME = { H: 150, L: 64, R: 64, T: 8, B: 20 };
+  // Bars are at most this wide, so a few daily buckets do not turn into blocks.
+  const MAX_BAR = 24;
   const hourLabel = (ms) => new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-  const kpi = (label, value, title = "", note = "") => `<div class="kpi"${title ? ` title="${esc(title)}"` : ""}><span>${esc(label)}</span><b>${esc(value)}</b>${note ? `<em>${esc(note)}</em>` : ""}</div>`;
+  // An "i" badge after a label; its explanation shows on hover or focus (style.css .info), instead of a native title popup.
+  const info = (text) => `<button type="button" class="info" data-tip="${esc(text)}" aria-label="About this figure">i</button>`;
+  const setInfo = (fig, text) => { const span = fig.querySelector("figcaption span"); const old = span.querySelector(".info"); if (old) old.remove(); if (text) span.insertAdjacentHTML("beforeend", info(text)); };
+  const kpi = (label, value, title = "", note = "") => `<div class="kpi"><span>${esc(label)}${title ? info(title) : ""}</span><b>${esc(value)}</b>${note ? `<em>${esc(note)}</em>` : ""}</div>`;
 
   // ---------------------------------------------------------------------------------------------- Now
   const maxSupply = (c) => (c && c.decayScale > 0 && c.flatRate > 0 ? c.supplyPaper + (c.flatRate * c.decayScale * c.decayScale) / (c.decayScale + c.tailProgress) : null);
 
   function renderNow(d) {
     const c = d.curve, m = d.mint, cc = d.crossCheck || {};
-    const big = (s) => BigInt(s ?? "0");
-    const balances = Number(d.rows.reduce((s, r) => s + big(r.balance18), 0n) / 10n ** 12n) / 1e6;
-    const max = maxSupply(c), users = cc.apiUniqueAccounts || d.totals.depositors;
+    const max = maxSupply(c);
     // Valuation at what one PAPER costs to mint today (hedged ±target, the Rules chart's figure) × max supply.
     const cost = m && typeof m.hedgedMintCostUsd === "number" ? m.hedgedMintCostUsd : null;
     // Staking APR over the 24 h ending at the last complete hour (the same figure as Activity's 1D apr and the Rules chart).
     const apr = d.protocol && d.protocol.periods && d.protocol.periods["1d"] ? d.protocol.periods["1d"].apr : null;
+    // The current point of every Rules chart (the charts themselves carry no marker): pool, cost, counted losses, rate,
+    // supply, inflation; the dev fee total comes from app.js's dev-fee data.
+    const lpNow = m && m.series && m.series.trackedLpUsd ? m.series.trackedLpUsd.filter((v) => v != null).pop() : null;
+    const rateNow = c && c.decayScale > 0 ? c.flatRate * (c.decayScale / (c.decayScale + c.tailProgress)) ** 2 : null;
+    const inflation = (() => { const mk = d.protocol && d.protocol.market, asOf = d.protocol && d.protocol.asOfMs; if (!mk || !mk.paperSupply) return null; const hist = new Map(); mk.paperSupply.forEach((v, i) => { const end = mk.startMs + (i + 1) * mk.intervalMs; if (!(asOf && end > asOf) && Number.isFinite(v)) hist.set(end, v); }); const t = Math.max(...hist.keys()), prev = hist.get(t - 86_400_000); return prev > 0 ? hist.get(t) / prev - 1 : null; })();
+    // Activity's current figures (the charts carry titles only): flows over the 24 h ending at the last complete hour,
+    // like APR and inflation; levels as read now.
+    const fl = d.protocol && d.protocol.flows && d.protocol.flows["1d"], oi = d.openInterest, oiN = oi ? oi.times.length - 1 : -1;
+    const tvlNow = cc.apiTvl18 ? Number(BigInt(cc.apiTvl18) / 10n ** 12n) / 1e6 : d.protocol && d.protocol.market ? d.protocol.market.tvl.filter((v) => v != null).pop() : null;
+    const netExp = oi && oi.total[oiN] > 0 ? ((oi.btcLong[oiN] + oi.ethLong[oiN]) - (oi.btcShort[oiN] + oi.ethShort[oiN])) / oi.total[oiN] : null;
+    const devFee = d.devFee && d.devFee.claimedTotal18 != null ? Number(BigInt(d.devFee.claimedTotal18) / 10n ** 12n) / 1e6 + (d.devFee.unclaimed18 != null ? Number(BigInt(d.devFee.unclaimed18) / 10n ** 12n) / 1e6 : 0) : null;
+    // Order: official readings first, then simple ratios, then formulas and models (the strongest assumptions last).
     $("now").innerHTML = [
-      kpi("user balances", usd(balances), `sum of every depositor's account value (${count(users)} users); not TVL`),
-      kpi("max supply ≈", paper(max), "current supply + what the mint curve can still emit, if the pool never dips below the cliff again; liquidations mint up to 2% more, and the owner can change the curve's parameters"),
-      kpi("valuation", max != null && cost != null ? usd(cost * max) : "–", cost != null ? `max supply × today's cost to mint one PAPER (${unit(cost)}: a BTC long + short pair closed at ±${m.hedgedCostTargetBps ?? 15} bps, docs' price-impact model). What minting it all would cost at today's rate, not a market price` : ""),
-      kpi("apr · 24h", pct(apr, 0), "USDC paid to stakers over the last complete 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER (−cumulative trader pnl ÷ supply). Rewards come in lumps: a trailing figure, not a forecast"),
+      kpi("TVL", usd(tvlNow), "official protocol treasury value = deposits − withdrawals; trader pnl and staker rewards stay inside the exchange"),
+      kpi("Open interest", oi ? usd(oi.total[oiN]) : "–", "entry notional of open positions, long + short (official house history, latest hourly reading)"),
+      kpi("Volume · 24h", fl ? usd(fl.volume) : "–", "total traded in the last complete 24 h (official protocol history)"),
+      kpi("Trader PnL · 24h", fl ? signedUsd(fl.pnlChange) : "–", "change in cumulative trader PnL in the last complete 24 h; negative = traders lost"),
+      kpi("Staker rewards · 24h", fl ? usd(fl.rewards) : "–", "USDC paid to stakers in the last complete 24 h"),
+      kpi("Supply", paper(c.supplyPaper), "PAPER minted so far (official)"),
+      kpi("LP balance", usd(lpNow), `tracked LP, the pool balance the mint curve reads (latest 10-minute sample); mint-decay threshold ${usd(c.threshold)}, staker threshold ${usd(c.stakerCap)}`),
+      kpi("Counted losses", usd(c.tailProgress), "tail progress: the losses the mint curve has counted since the pool first crossed the cliff; what sets today's mint rate"),
+      kpi("Net exposure", netExp == null ? "–" : `${netExp > 0 ? "+" : ""}${pct(netExp, 0)}`, "(long − short) ÷ (long + short) of open interest; positive = traders net long, so the house is net short"),
+      kpi("Inflation · 24h", pct(inflation, inflation != null && inflation < 0.1 ? 1 : 0), "PAPER supply growth over the last complete 24 h (official hourly history)"),
+      kpi("Mint rate", rateNow == null ? "–" : `${rateNow.toFixed(1)}/$`, `PAPER minted per $1 of counted loss: ${c.flatRate} × (D ÷ (D + counted losses))², D = ${usd(c.decayScale)}`),
+      kpi("Dev fees accrued", usd(devFee), "the dev half of trading fees since genesis: claimed (exchange events) + unclaimed (devFeeAccumulator)"),
+      kpi("APR · 24h", pct(apr, 0), "USDC paid to stakers over the last complete 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER (−cumulative trader pnl ÷ supply). Rewards come in lumps: a trailing figure, not a forecast"),
+      kpi("Max supply ≈", paper(max), "current supply + what the mint curve can still emit, if the pool never dips below the cliff again; liquidations mint up to 2% more, and the owner can change the curve's parameters"),
+      kpi("Cost to mint", unit(cost), `net cost of one PAPER for a BTC long + short pair closed at ±${(m && m.hedgedCostTargetBps) || 15} bps at today's mint rate: (1 − win ratio) ÷ (0.98 × rate)`),
+      kpi("Valuation", max != null && cost != null ? usd(cost * max) : "–", cost != null ? `max supply × today's cost to mint one PAPER (${unit(cost)}: a BTC long + short pair closed at ±${m.hedgedCostTargetBps ?? 15} bps, docs' price-impact model). What minting it all would cost at today's rate, not a market price` : ""),
     ].join("");
   }
 
@@ -50,22 +84,33 @@
   // ------------------------------------------------------------------------------------------ Activity
   // Granularity of the Activity charts: hourly bars, or one bar per local day. Headline figures cover the last complete
   // hour or the 24 h ending at the last complete hour (protocol.flows / periods), not the bar in progress.
-  const PERIODS = [["1h", "1H", 1], ["1d", "1D", 24]];
+  // 5M covers the last 24 h only (the official 1-minute history, coarsened by the indexer).
+  const PERIODS = [["5m", "5M", 5 / 60], ["1h", "1H", 1], ["1d", "1D", 24]];
   // X axis of the two tail projections in Rules: estimated date (at the current tail speed) or cumulative realized loss.
   let tailAxis = "time";
   try { const v = localStorage.getItem("paperboards.tailAxis"); if (v === "time" || v === "loss") tailAxis = v; } catch { /* storage unavailable */ }
+  // How far the projections run (the Rules "horizon" switch): every time-axis projection and the dev-fee chart share it.
+  const HORIZONS = [[7, "7D"], [30, "30D"], [90, "90D"], [365, "1Y"]];
+  let horizon = 7;
+  try { const v = Number(localStorage.getItem("paperboards.horizon")); if (HORIZONS.some(([d]) => d === v)) horizon = v; } catch { /* storage unavailable */ }
+  // Time labels on the projected charts: hour precision up to 30 days, dates with the year beyond that.
+  const dayLabel = (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const horizonLabel = () => (horizon > 30 ? dayLabel : hourLabel);
   let period = "1h";
   try { const v = localStorage.getItem("paperboards.period"); if (PERIODS.some(([k]) => k === v)) period = v; } catch { /* storage unavailable */ }
 
   function renderActivity(d) {
-    const p = d.protocol || {}, f = p.flows && p.flows[period], m = p.market;
+    const five = period === "5m", p = d.protocol || {}, m = five ? d.market5m : p.market;
     const [, , hours] = PERIODS.find(([k]) => k === period);
     for (const b of document.querySelectorAll("#period button")) b.classList.toggle("on", b.dataset.period === period);
     const box = $("activity-rows");
     // Whole history, bucketed by the granularity: flows (bars) are summed per bucket, levels keep the bucket's last value.
     // Daily buckets start at local midnight; hourly buckets are the history's own hours.
     const daily = hours >= 24;
-    const keyOf = (ms) => { if (!daily) return ms; const t = new Date(ms); t.setHours(0, 0, 0, 0); return t.getTime(); };
+    // Daily buckets start at local midnight. The launch evening (the two hours from HISTORY_START to the next midnight)
+    // joins the first full day: on its own it is too narrow for a bar or a label, and nothing precedes launch.
+    const firstMidnight = (() => { const t = new Date(HISTORY_START); t.setHours(24, 0, 0, 0); return t.getTime(); })();
+    const keyOf = (ms) => { if (!daily) return ms; const t = new Date(ms); t.setHours(0, 0, 0, 0); return Math.max(t.getTime(), firstMidnight); };
     const bucket = (series, sum) => {
       const out = [];
       for (const [ms, v] of series) {
@@ -83,34 +128,71 @@
       const raw = (arr, shift = 0) => arr.map((v, i) => [t(i) + shift, v]).filter(([x]) => x >= HISTORY_START);
       // Levels: each hourly value is the reading at the hour's end, so it is plotted there.
       pts = (arr) => bucket(raw(arr, m.intervalMs), false);
-      flow = (arr) => bucket(raw(arr), true);
+      // Flows: hourly bars are complete hours only (the hour in progress holds a partial reading); daily bars run from
+      // local midnight, so the last one is today so far.
+      const asOf = (five ? m.asOfMs : p.asOfMs) || Infinity;
+      flow = (arr) => bucket(raw(arr).filter(([x]) => daily || x + m.intervalMs <= asOf), true);
     }
+    // A flow row's headline is its latest bar: the last complete hour (1H) or today so far, local time (1D).
+    const latest = (bars, fmt) => (bars && bars.length ? fmt(bars[bars.length - 1][1]) : "–");
+    const span = daily ? "today so far (local time)" : five ? "the last complete 5 minutes" : "the last complete hour";
+    // Short form beside a flow's headline, so the value's period is read without hovering.
+    const spanShort = daily ? "today" : five ? "last 5 min" : "last hour";
+    const per = daily ? "day" : five ? "5 min" : "hour";
+    // Deposits (inflow) and withdrawals (outflow, drawn below zero) per bar, from the Exchange events; the last bucket
+    // is complete only when the data was generated after its end.
+    const cf = d.capitalFlows && (five ? d.capitalFlows.fiveMinute : d.capitalFlows.hourly), genMs = Date.parse(d.generatedAt);
+    const cfBars = (arr, sign) => (cf ? bucket(arr.map((v, i) => [cf.startMs + i * cf.intervalMs, sign * v]).filter(([x]) => x >= HISTORY_START && (daily || x + cf.intervalMs <= genMs)), true) : null);
+    const inBars = cf && cfBars(cf.inflow, 1), outBars = cf && cfBars(cf.outflow, -1);
+    // Both flows on one chart: a bar up for the deposits and a bar down for the withdrawals of each bucket.
+    const flowBars = inBars && outBars ? [...inBars.map(([t, v]) => [t, v, "In"]), ...outBars.map(([t, v]) => [t, v, "Out"])].sort((a, b) => a[0] - b[0]) : null;
     const timeLabel = daily ? (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : hourLabel;
     const last = (arr) => (arr && arr.length ? arr[arr.length - 1] : null);
-    const oi = d.openInterest;
+    const oi = five ? d.openInterest5m : d.openInterest;
     const oiPts = oi ? bucket(oi.times.map((x, i) => [x, oi.total[i]]).filter(([x]) => x >= t0), false) : null;
     // Net exposure of open interest: (long − short) ÷ (long + short), BTC + ETH entry notional; positive = traders net
     // long (the house net short), 0 = balanced, ±100% = one-sided.
     const netAt = (i) => (oi.btcLong[i] + oi.ethLong[i]) - (oi.btcShort[i] + oi.ethShort[i]);
     const netPctAt = (i) => (oi.total[i] > 0 ? netAt(i) / oi.total[i] : null);
     const netPts = oi ? bucket(oi.times.map((x, i) => [x, netPctAt(i)]).filter(([x, v]) => x >= t0 && v != null && Number.isFinite(v)), false) : null;
-    // [label, value, title, chart points, formatter, bars, overlay] — the value only (no notes); trader pnl and staker
-    // rewards carry their cumulative total as a line over the bars (overlay, right axis).
+    // Notional opened and closed per bucket, derived (the API has no open/close split): volume counts both opening and
+    // closing fills and the change in open interest is their difference, so opened = (volume + ΔOI) ÷ 2 and
+    // closed = (volume − ΔOI) ÷ 2, ΔOI read from the open-interest reading at each bucket's start and end. Closed
+    // includes liquidations. Drawn as bars up (opened) and down (closed) under the open-interest line.
+    const oiAt = (t) => { let lo = 0, hi = oi.times.length - 1, best = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (oi.times[mid] <= t) { best = mid; lo = mid + 1; } else hi = mid - 1; } return best < 0 ? null : oi.total[best]; };
+    const openClose = oi && m ? flow(m.volumePerInterval).map(([k, v], i, arr) => {
+      const end = daily ? (i + 1 < arr.length ? arr[i + 1][0] : oi.times[oi.times.length - 1]) : k + m.intervalMs;
+      const a = oiAt(k), b = oiAt(end);
+      if (a == null || b == null) return null;
+      const dOI = b - a, opened = Math.min(v, Math.max(0, (v + dOI) / 2));
+      return [k, opened, -(v - opened)];
+    }).filter(Boolean) : [];
+    const ocBars = openClose.length ? [...openClose.map(([k, o]) => [k, o, "Opened"]), ...openClose.map(([k, , c]) => [k, c, "Closed"])].sort((a, b) => a[0] - b[0]) : null;
+    // [label, value, title, chart points, formatter, bars, overlay, period] — the value and period are kept for the
+    // tooltip and Ask ChatGPT, but the caption shows the title only (current figures live in Now); trader pnl and
+    // staker rewards carry their cumulative total as a line over the bars (overlay, right axis), volume its moving
+    // average. A line's value reads on hover.
     const cumPnl = m && m.traderPnl ? pts(m.traderPnl) : null, cumRewards = m && m.stakingRewards ? pts(m.stakingRewards) : null;
+    // Moving average of the volume bars, one bucket wide per point: 12 × 5 min = 1 h, 24 h, or 7 days; only once the
+    // window is full, so the first points are not averages of fewer bars.
+    const maWindow = five ? 12 : daily ? 7 : 24, maLabel = five ? "1h avg" : daily ? "7d avg" : "24h avg";
+    const movingAvg = (bars) => { const out = []; for (let i = maWindow - 1; i < bars.length; i++) { let sum = 0; for (let k = i - maWindow + 1; k <= i; k++) sum += bars[k][1]; out.push([bars[i][0], sum / maWindow]); } return out; };
+    const volBars = m && flow(m.volumePerInterval), volMa = volBars && volBars.length >= maWindow ? movingAvg(volBars) : null;
     const rows = [
-      ["volume", f ? usd(f.volume) : "–", `total traded in the last complete ${daily ? "24 h" : "hour"}; bars = per ${daily ? "day" : "hour"}`, m && flow(m.volumePerInterval), usd, true],
-      ["tvl", d.crossCheck && d.crossCheck.apiTvl18 ? usd(Number(BigInt(d.crossCheck.apiTvl18) / 10n ** 12n) / 1e6) : usd(m && last(m.tvl)), "official protocol treasury value", m && pts(m.tvl), usd],
-      ["trader pnl", f ? signedUsd(f.pnlChange) : "–", `change in cumulative trader pnl in the last complete ${daily ? "24 h" : "hour"} (negative = traders lost); bars = per ${daily ? "day" : "hour"} (left axis), line = cumulative since the start (right axis)`, m && flow(m.pnlPerInterval), signedUsd, true, cumPnl && { points: cumPnl, fmt: signedUsd, label: "cumulative" }],
-      ["staker rewards", f ? usd(f.rewards) : "–", `USDC paid to stakers in the last complete ${daily ? "24 h" : "hour"}; bars = per ${daily ? "day" : "hour"} (left axis), line = cumulative since the start (right axis)`, m && flow(m.rewardsPerInterval), usd, true, cumRewards && { points: cumRewards, fmt: usd, label: "cumulative" }],
-      ...(oi ? [["open interest", usd(last(oi.total)), "entry notional of open positions, long + short (official house history)", oiPts, usd],
-        ["net exposure, % of open interest", (() => { const v = netPctAt(oi.times.length - 1); return v == null ? "–" : `${v > 0 ? "+" : ""}${pct(v, 0)}`; })(), `(long − short) ÷ (long + short), BTC + ETH entry notional; positive = traders net long, so the house is net short. Now: ${signedUsd(netAt(oi.times.length - 1))} of ${usd(oi.total[oi.times.length - 1])} (BTC ${signedUsd(oi.btcLong[oi.times.length - 1] - oi.btcShort[oi.times.length - 1])}, ETH ${signedUsd(oi.ethLong[oi.times.length - 1] - oi.ethShort[oi.times.length - 1])})`, netPts, (v) => `${v > 0 ? "+" : ""}${pct(v, 0)}`]] : []),
-      ["users", count((d.crossCheck && d.crossCheck.apiUniqueAccounts) || (m && last(m.users))), "accounts with a deposit (official)", m && pts(m.users), count],
+      ["Volume", latest(volBars, usd), `total traded in ${span} (the latest bar); bars = per ${per}; line = ${maLabel.replace(" avg", "")} moving average of the bars`, volBars, usd, true, volMa && { points: volMa, fmt: usd, label: maLabel, shift: 0, sameScale: true }, spanShort],
+      // TVL equals the net of deposits and withdrawals (within the $1 withdrawal fees): trader pnl and staker rewards
+      // move money inside the exchange. So the bars are the flows (deposits up, withdrawals down) and the line is TVL.
+      ["TVL", d.crossCheck && d.crossCheck.apiTvl18 ? usd(Number(BigInt(d.crossCheck.apiTvl18) / 10n ** 12n) / 1e6) : usd(m && last(m.tvl)), `official protocol treasury value (line, right axis) = deposits − withdrawals, since trader pnl and staker rewards stay inside the exchange; bars = USDC deposited (up) and withdrawn (down, including the withdrawal fee) per ${per}, from the exchange events on HyperEVM; headline = tvl now`, flowBars, signedUsd, true, m && { points: pts(m.tvl), fmt: usd, label: "TVL", shift: 0, isHeadline: true }],
+      ["Trader PnL", latest(m && flow(m.pnlPerInterval), signedUsd), `change in cumulative trader pnl in ${span}, the latest bar (negative = traders lost); bars = per ${per} (left axis), line = cumulative since the start (right axis)`, m && flow(m.pnlPerInterval), signedUsd, true, cumPnl && { points: cumPnl, fmt: signedUsd, label: "Cumulative", shift: daily ? 0 : m.intervalMs, fit: five }, spanShort],
+      ["Staker rewards", latest(m && flow(m.rewardsPerInterval), usd), `USDC paid to stakers in ${span}, the latest bar; bars = per ${per} (left axis), line = cumulative since the start (right axis)`, m && flow(m.rewardsPerInterval), usd, true, cumRewards && { points: cumRewards, fmt: usd, label: "Cumulative", shift: daily ? 0 : m.intervalMs, fit: five }, spanShort],
+      ...(oi ? [["Net exposure, % of open interest", (() => { const v = netPctAt(oi.times.length - 1); return v == null ? "–" : `${v > 0 ? "+" : ""}${pct(v, 0)}`; })(), `(long − short) ÷ (long + short), BTC + ETH entry notional; positive = traders net long, so the house is net short. Now: ${signedUsd(netAt(oi.times.length - 1))} of ${usd(oi.total[oi.times.length - 1])} (BTC ${signedUsd(oi.btcLong[oi.times.length - 1] - oi.btcShort[oi.times.length - 1])}, ETH ${signedUsd(oi.ethLong[oi.times.length - 1] - oi.ethShort[oi.times.length - 1])})`, netPts, (v) => `${v > 0 ? "+" : ""}${pct(v, 0)}`],
+        ["Open interest", usd(last(oi.total)), `line (right axis) = entry notional of open positions, long + short (official house history); bars = notional opened (up) and closed (down, liquidations included) per ${per}, derived as (volume ± Δopen interest) ÷ 2 since the API has no open/close split; this assumes volume counts both opening and closing fills`, ocBars, signedUsd, true, { points: oiPts, fmt: usd, label: "Open interest", shift: 0, isHeadline: true }]] : []),
     ];
     // Laid out like the Rules charts: the value beside the title (its note after it), then the chart; hover shows the
     // cursor label on every chart at once.
     box.className = "charts charts-2";
-    box.innerHTML = rows.map(([label, value, title, points, fmt, , overlay], i) => `<figure class="chart act" data-i="${i}"${title ? ` title="${esc(title)}"` : ""}>
-      <figcaption><span>${esc(label)}</span><b class="cv">${esc(value)}</b>${overlay && overlay.points.length ? `<em class="ocap"><i></i>cumulative ${esc(overlay.fmt(overlay.points[overlay.points.length - 1][1]))}</em>` : ""}</figcaption>
+    box.innerHTML = rows.map(([label, , title, points], i) => `<figure class="chart act" data-i="${i}">
+      <figcaption><span>${esc(label)}${title ? info(title) : ""}</span><b class="cv"></b></figcaption>
       ${points ? `<svg role="img" aria-label="${esc(label)} history"></svg>` : ""}
     </figure>`).join("");
     const base = `${daily ? "daily" : "hourly"} bars since genesis · headline: last complete ${daily ? "24 h" : "hour"} · hover a chart to read every row at that time`;
@@ -121,24 +203,37 @@
       if (!points) return;
       draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, timeLabel, keepCaption: true, overlay }));
     });
+    // The charts share one hover, so leaving any one of them resets all; a chart redrawn under the cursor (the data
+    // poll) loses its own leave listener, so the grid resets them too when the cursor leaves it.
+    box.onmouseleave = () => hover(null);
   }
 
-  // The caption of a chart with a "now" marker states the value at that marker, beside the title, so the current
-  // position reads without hovering.
-  const nowCaption = (text) => esc(text);
-
-  // A small label that follows the cursor inside the chart, instead of a readout in the caption.
-  // The cursor label is text only, in the marker labels' voice (small caps, muted), with a thin page-colored halo so it
-  // stays legible over the line; no box, nothing bold.
-  const TIP = `<g class="tip" visibility="hidden"><text class="mlabel" paint-order="stroke" stroke="var(--panel)" stroke-width="3" stroke-linejoin="round" text-anchor="middle"/></g>`;
-  function moveTip(svg, W, px, py, text) {
+  // The hover readouts are axis labels, as on a trading chart: the value in a box on the left axis at the point's
+  // height, the time (or the loss amount on the counted-loss axis) in a box under the x axis at the cursor, a second
+  // series' value in a box on the right axis; a dotted horizontal line joins the point to its value. Nothing floats over
+  // the plot.
+  const TIP = `<g class="tip" visibility="hidden"><line class="crossh"/><rect class="axbox axv" rx="2"/><text class="axlabel axv"/><rect class="axbox axx" rx="2"/><text class="axlabel axx"/><rect class="axbox axr" rx="2"/><text class="axlabel axr"/></g>`;
+  // geom = { L, R, W, H, B }: the plot frame. r = { y, x, right, rightY }: the label texts (right may be null).
+  function moveTip(svg, geom, px, py, r) {
     const g = svg.querySelector(".tip"); if (!g) return;
-    if (text == null) { g.setAttribute("visibility", "hidden"); return; }
-    const t = g.querySelector("text");
-    t.textContent = text;
-    // Pinned to the top edge of the plot (the marker-label row) at the cursor's x, so it never sits on the line or bars.
-    const w = text.length * 5.6, cx = Math.max(4 + w / 2, Math.min(W - 4 - w / 2, px));
-    t.setAttribute("x", cx.toFixed(1)); t.setAttribute("y", "9");
+    if (r == null) { g.setAttribute("visibility", "hidden"); return; }
+    const { L, R, W, H, B } = geom;
+    const place = (cls, text, tx, ty, anchor) => {
+      const t = g.querySelector(`text.${cls}`), b = g.querySelector(`rect.${cls}`);
+      if (text == null) { t.setAttribute("visibility", "hidden"); b.setAttribute("visibility", "hidden"); return; }
+      const w = text.length * 5.6 + 8;
+      t.textContent = text; t.setAttribute("x", tx.toFixed(1)); t.setAttribute("y", (ty + 3.5).toFixed(1)); t.setAttribute("text-anchor", anchor);
+      b.setAttribute("x", (anchor === "end" ? tx - w + 4 : anchor === "middle" ? tx - w / 2 : tx - 4).toFixed(1)); b.setAttribute("y", (ty - 6.5).toFixed(1)); b.setAttribute("width", w.toFixed(1)); b.setAttribute("height", "13");
+      t.setAttribute("visibility", "visible"); b.setAttribute("visibility", "visible");
+    };
+    // A box wider than its axis margin would be clipped at the svg edge, so it sits just inside the plot instead.
+    const yc = Math.max(9, Math.min(H - B - 2, py)), fitsLeft = r.y.length * 5.6 + 8 <= L - 2;
+    place("axv", r.y, fitsLeft ? L - 6 : L + 6, yc, fitsLeft ? "end" : "start");
+    const w = r.x.length * 5.6 + 8, cx = Math.max(L + w / 2, Math.min(W - R - w / 2, px));
+    place("axx", r.x, cx, H - 8, "middle");
+    const fitsRight = !r.right || r.right.length * 5.6 + 8 <= R - 2;
+    place("axr", r.right, fitsRight ? W - R + 6 : W - R - 6, r.right ? Math.max(9, Math.min(H - B - 2, r.rightY)) : 0, fitsRight ? "start" : "end");
+    const h = g.querySelector("line.crossh"); h.setAttribute("x1", L); h.setAttribute("x2", W - R); h.setAttribute("y1", py.toFixed(1)); h.setAttribute("y2", py.toFixed(1));
     g.setAttribute("visibility", "visible");
   }
 
@@ -179,19 +274,36 @@
     const W = opts.compact ? Math.max(120, fig.querySelector("svg").clientWidth || fig.clientWidth) : Math.max(220, fig.clientWidth);
     // opts.overlay = { points, fmt }: a second series (e.g. the cumulative total behind per-hour bars) drawn as a line on
     // its own scale, with its ticks on the right edge.
-    const ov = opts.overlay && !opts.compact ? opts.overlay.points.filter(([ms, v]) => ms >= t0 && ms <= t1 && v != null && Number.isFinite(v)) : [];
-    let oLo = Math.min(0, ...ov.map(([, v]) => v)), oHi = Math.max(0, ...ov.map(([, v]) => v));
+    // overlay.shift: how far after a bar's start its matching overlay reading is taken (an hourly bar goes with the
+    // cumulative reading at the end of that hour); the reading is drawn at the bar's position.
+    const ovShift = (opts.overlay && opts.overlay.shift) || 0;
+    const ov = opts.overlay && !opts.compact ? opts.overlay.points.map(([ms, v]) => [ms - ovShift, v]).filter(([ms, v]) => ms >= t0 && ms <= t1 && v != null && Number.isFinite(v)) : [];
+    // overlay.fit: scale the right axis to the line's own range instead of anchoring it at zero, so a cumulative total
+    // that moves little over a short window (e.g. 24 h at 5 min) is not flattened into a straight line.
+    const oFit = !!(opts.overlay && opts.overlay.fit);
+    let oLo = Math.min(oFit ? Infinity : 0, ...ov.map(([, v]) => v)), oHi = Math.max(oFit ? -Infinity : 0, ...ov.map(([, v]) => v));
     if (oLo === oHi) oHi = oLo + 1;
-    const oPad = (oHi - oLo) * 0.08; oLo -= oLo < 0 ? oPad : 0; oHi += oPad;
-    const oTicks = ov.length ? [oHi - oPad, (oLo + oHi - oPad) / 2, oLo < 0 ? oLo + oPad : 0] : [];
-    const H = opts.compact ? 40 : 150, L = opts.compact ? 1 : Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10, T = opts.compact ? 3 : 8, B = opts.compact ? 3 : 20;
-    const R = opts.compact ? 1 : ov.length ? Math.ceil(Math.max(...oTicks.map((v) => opts.overlay.fmt(v).length)) * 5.6) + 10 : 10;
+    const oPad = (oHi - oLo) * 0.08; oLo -= oFit || oLo < 0 ? oPad : 0; oHi += oPad;
+    // overlay.sameScale: the line is in the bars' units (a moving average), so it uses the left axis and adds no ticks.
+    const oSame = !!(opts.overlay && opts.overlay.sameScale);
+    const oTicks = ov.length && !oSame ? (oFit ? [oHi - oPad, (oLo + oHi) / 2, oLo + oPad] : [oHi - oPad, (oLo + oHi - oPad) / 2, oLo < 0 ? oLo + oPad : 0]) : [];
+    const H = opts.compact ? 40 : FRAME.H, T = opts.compact ? 3 : FRAME.T, B = opts.compact ? 3 : FRAME.B;
+    // The shared frame, widened only if a label would not fit (it never should with the compact formats below).
+    const L = opts.compact ? 1 : Math.max(FRAME.L, Math.ceil(Math.max(...ticks.map((v) => fmt(v).length)) * 5.6) + 10);
+    const R = opts.compact ? 1 : Math.max(FRAME.R, oTicks.length ? Math.ceil(Math.max(...oTicks.map((v) => opts.overlay.fmt(v).length)) * 5.6) + 10 : 0);
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
     const x = (ms) => L + ((ms - t0) / Math.max(1, t1 - t0)) * (W - L - R), y = (v) => T + (1 - (tr(v) - sLo) / (sHi - sLo)) * (H - T - B);
     let marks = "";
     if (opts.bars) {
-      const bw = Math.max(1, ((W - L - R) / Math.max(1, points.length)) * (opts.compact ? 0.8 : 0.7));
-      marks = pts.map(([ms, v]) => `<rect class="${v < 0 ? "barneg" : "bar"}" x="${(x(ms) - bw / 2).toFixed(1)}" y="${Math.min(y(v), y(0)).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, Math.abs(y(v) - y(0))).toFixed(1)}"/>`).join("");
+      // Bar width: from the count of buckets, but never wider than the smallest gap between neighbours (the launch-day
+      // bucket is only two hours before the next midnight), and every bar kept inside the plot frame.
+      const times = [...new Set(pts.map(([ms]) => ms))].sort((a, b) => a - b);
+      let gap = Infinity; for (let i = 1; i < times.length; i++) gap = Math.min(gap, x(times[i]) - x(times[i - 1]));
+      // Paired bars (deposits up / withdrawals down, opened / closed) share one time slot, so the width comes from the
+      // count of distinct times; every bar chart then has the same width per bucket.
+      const bw = Math.max(1, Math.min(((W - L - R) / Math.max(1, times.length)) * (opts.compact ? 0.8 : 0.7), Number.isFinite(gap) ? gap * 0.7 : Infinity, opts.compact ? Infinity : MAX_BAR));
+      const bx = (ms) => Math.max(L, Math.min(W - R - bw, x(ms) - bw / 2));
+      marks = pts.map(([ms, v]) => `<rect class="${v < 0 ? "barneg" : "bar"}" x="${bx(ms).toFixed(1)}" y="${Math.min(y(v), y(0)).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, Math.abs(y(v) - y(0))).toFixed(1)}"/>`).join("");
     } else {
       let path = "", pen = false;
       for (const [ms, v] of points) { if (v == null || !Number.isFinite(v)) { pen = false; continue; } path += `${pen ? "L" : "M"}${x(ms).toFixed(1)},${y(v).toFixed(1)}`; pen = true; }
@@ -214,15 +326,21 @@
     const hlines = (opts.hlines || []).filter((h) => h.y >= lo && h.y <= hi).map((h) => `<line class="vmark ${h.kind || ""}" x1="${L}" x2="${W - R}" y1="${y(h.y).toFixed(1)}" y2="${y(h.y).toFixed(1)}"/><text class="mlabel" x="${h.align === "left" ? L + 4 : W - R - 4}" y="${(y(h.y) - 3).toFixed(1)}" text-anchor="${h.align === "left" ? "start" : "end"}">${esc(h.label)}</text>`).join("");
     svg.innerHTML = ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="tick" x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${esc(fmt(v))}</text>`).join("")
       + hlines
-      + (opts.compact ? (lo < 0 ? `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>` : "") : `<text class="tick" x="${L}" y="${H - 5}">${esc((opts.timeLabel || hourLabel)(t0))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc((opts.timeLabel || hourLabel)(t1))}</text>`)
+      // X labels: the two ends, or, with few buckets (the daily view's first days), one under each bucket so every bar
+      // is dated; the ends are then anchored inward to stay inside the frame.
+      + (opts.compact ? (lo < 0 ? `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>` : "") : (() => {
+        const tl = opts.timeLabel || hourLabel, times = [...new Set(pts.map(([ms]) => ms))].sort((a, b) => a - b);
+        if (opts.bars && times.length <= 10) return times.map((ms, i) => `<text class="tick" x="${x(ms).toFixed(1)}" y="${H - 5}" text-anchor="${i === 0 ? "start" : i === times.length - 1 ? "end" : "middle"}">${esc(tl(ms))}</text>`).join("");
+        // The ends: dates only once the span reaches three days (an hour of "Oct 20, 00:36" says nothing there).
+        const end = t1 - t0 >= 3 * 86_400_000 ? (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", ...(t1 - t0 > 60 * 86_400_000 ? { year: "numeric" } : {}) }) : tl;
+        return `<text class="tick" x="${L}" y="${H - 5}">${esc(end(t0))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(end(t1))}</text>`;
+      })())
       + bands + marks
       + (ov.length ? (() => {
-        const oy = (v) => T + (1 - (v - oLo) / (oHi - oLo)) * (H - T - B);
+        const oy = oSame ? y : (v) => T + (1 - (v - oLo) / (oHi - oLo)) * (H - T - B);
         return oTicks.map((v) => `<text class="tick otick" x="${W - R + 6}" y="${oy(v) + 3}">${esc(opts.overlay.fmt(v))}</text>`).join("")
           + `<path class="line" d="${ov.map(([ms, v], i) => `${i ? "L" : "M"}${x(ms).toFixed(1)},${oy(v).toFixed(1)}`).join("")}"/>`;
       })() : "")
-      // The current position: a dot only (the caption states its value).
-      + (opts.markNow && !opts.compact ? (() => { const p = past[past.length - 1]; return `<circle class="mark" r="4.5" cx="${x(p[0]).toFixed(1)}" cy="${y(p[1]).toFixed(1)}"/>`; })() : "")
       + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/>${opts.compact ? "" : TIP}<rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
     const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
     const nearest = (ms) => pts.reduce((best, p) => (Math.abs(p[0] - ms) < Math.abs(best[0] - ms) ? p : best), pts[0]);
@@ -230,12 +348,22 @@
       const p = ms == null ? pts[pts.length - 1] : nearest(ms);
       // Compact sparklines keep the caption readout (the Activity rows share one hover); full charts use the cursor label.
       if (opts.compact) cv.textContent = ms == null ? "" : fmt(p[1]);
-      else if (!opts.keepCaption) cv.innerHTML = opts.markNow ? nowCaption(fmt(past[past.length - 1][1])) : "";
-      if (ms == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, W, 0, 0, null); return; }
+      else if (!opts.keepCaption) cv.innerHTML = "";
+      if (ms == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, null, 0, 0, null); return; }
       cross.setAttribute("x1", x(p[0])); cross.setAttribute("x2", x(p[0])); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", x(p[0])); dot.setAttribute("cy", y(p[1])); dot.setAttribute("visibility", opts.bars ? "hidden" : "visible");
       const o = ov.length ? ov.reduce((b, q) => (Math.abs(q[0] - p[0]) < Math.abs(b[0] - p[0]) ? q : b), ov[0]) : null;
-      if (!opts.compact) moveTip(svg, W, x(p[0]), y(p[1]), `${fmt(p[1])}${o ? ` · ${opts.overlay.label || "total"} ${opts.overlay.fmt(o[1])}` : ""} · ${(opts.timeLabel || hourLabel)(p[0])}${p[0] > nowMs ? " · projected" : ""}`);
+      // Two bars at one time (deposits up, withdrawals down): read both.
+      const twin = pts.filter((q) => q[0] === p[0]), head = twin.length > 1 ? twin.map((q) => `${q[2] || ""} ${fmt(q[1])}`.trim()).join(" / ") : fmt(p[1]);
+      if (!opts.compact) {
+        const oy = o && !oSame ? T + (1 - (o[1] - oLo) / (oHi - oLo)) * (H - T - B) : null;
+        // A same-scale overlay (moving average) reads with the value; a second-axis one reads on the right axis.
+        moveTip(svg, { L, R, W, H, B }, x(p[0]), y(p[1]), {
+          y: o && oSame ? `${head} · ${opts.overlay.label} ${opts.overlay.fmt(o[1])}` : head,
+          x: `${(opts.timeLabel || hourLabel)(p[0])}${p[0] > nowMs ? " · projected" : ""}`,
+          right: o && !oSame ? `${opts.overlay.label || "total"} ${opts.overlay.fmt(o[1])}` : null, rightY: oy,
+        });
+      }
     };
     hit.addEventListener("mousemove", (e) => { const r = svg.getBoundingClientRect(); const px = ((e.clientX - r.left) / r.width) * W; onHover(t0 + Math.max(0, Math.min(1, (px - L) / (W - L - R))) * (t1 - t0)); });
     hit.addEventListener("mouseleave", () => onHover(null));
@@ -243,18 +371,20 @@
     return show;
   }
 
-  // Projection of a cumulative series at its recent pace, hourly for `days` after its last point: the recent 6 h pace as
-  // the central line, the band from the slowest to the fastest of the recent 3 h, 6 h and 24 h (the same model as the
-  // counted losses).
+  // Projection of a cumulative series at its recent pace, hourly for `days` after its last point: the median hourly
+  // increase over the last 24 h as the central line, its 25th–75th percentile as the band (the same model as the counted
+  // losses; the readings may be unevenly spaced, so each hour's increase is read between the nearest readings).
   function linearProjection(pts, days = 7) {
     const p = pts.filter(([, v]) => v != null && Number.isFinite(v));
     if (p.length < 2) return { future: [], futureBand: [] };
-    const last = p[p.length - 1];
-    const over = (h) => { const from = p.find(([t]) => t >= last[0] - h * 3_600_000) || p[0]; const dh = (last[0] - from[0]) / 3_600_000; return dh > 0 ? (last[1] - from[1]) / dh : null; };
-    const mid = over(6), all = [over(3), mid, over(24)].filter((v) => v != null && Number.isFinite(v));
-    if (mid == null || !all.length) return { future: [], futureBand: [] };
-    const lo = Math.min(...all), hi = Math.max(...all), future = [], futureBand = [];
-    for (let h = 0; h <= days * 24; h++) { const t = last[0] + h * 3_600_000; future.push([t, last[1] + mid * h]); futureBand.push([t, last[1] + lo * h, last[1] + hi * h]); }
+    const last = p[p.length - 1], H = 3_600_000;
+    const at = (t) => p.reduce((b, q) => (Math.abs(q[0] - t) < Math.abs(b[0] - t) ? q : b), p[0]);
+    const hourly = [];
+    for (let h = 24; h >= 1; h--) { const a = at(last[0] - h * H), b = at(last[0] - (h - 1) * H); if (b[0] > a[0] && b[0] - a[0] <= 1.5 * H) hourly.push((b[1] - a[1]) / ((b[0] - a[0]) / H)); }
+    if (hourly.length < 6) return { future: [], futureBand: [] };
+    const sorted = [...hourly].sort((x, y) => x - y), q = (f) => sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))];
+    const mid = q(0.5), lo = q(0.25), hi = q(0.75), future = [], futureBand = [];
+    for (let h = 0; h <= days * 24; h++) { const t = last[0] + h * H; future.push([t, last[1] + mid * h]); futureBand.push([t, last[1] + lo * h, last[1] + hi * h]); }
     return { future, futureBand, pace: { mid, low: lo, high: hi } };
   }
 
@@ -268,8 +398,8 @@
 
   function curveChart(fig, o) {
     const svg = fig.querySelector("svg"), cv = fig.querySelector(".cv");
-    const W = Math.max(220, fig.clientWidth), H = 150, T = 10, B = 22, R = 12;
-    const L = Math.ceil(Math.max(...o.ticksY.map((t) => o.fmtY(t).length)) * 5.6) + 10;
+    const W = Math.max(220, fig.clientWidth), { H, T, R } = FRAME, B = FRAME.B + 2;
+    const L = Math.max(FRAME.L, Math.ceil(Math.max(...o.ticksY.map((t) => o.fmtY(t).length)) * 5.6) + 10);
     const x = (v) => L + ((v - o.x0) / (o.x1 - o.x0)) * (W - L - R), y = (v) => T + (1 - (v - o.y0) / (o.y1 - o.y0)) * (H - T - B);
     let d = "";
     for (let i = 0; i <= 360; i++) {
@@ -293,14 +423,14 @@
       + (o.asymptote != null ? `<line class="asym" x1="${L}" x2="${W - R}" y1="${y(o.asymptote)}" y2="${y(o.asymptote)}"/>` : "")
       + (o.asymptote != null && o.asymptoteLabel ? `<text class="mlabel" x="${W - R - 4}" y="${(y(o.asymptote) - 4).toFixed(1)}" text-anchor="end">${esc(o.asymptoteLabel)}</text>` : "")
       + bandPoly + `<path class="line" d="${d}"/>`
-      + (o.now != null ? `<circle class="mark" r="4.5" cx="${x(o.now).toFixed(1)}" cy="${y(o.f(o.now)).toFixed(1)}"/>` : "")
       + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/>${TIP}<rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
     const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-    const read = (v) => { const r = o.band && o.band(v); return `${o.fmtY(o.f(v))}${r ? ` (${o.fmtY(Math.min(...r))}–${o.fmtY(Math.max(...r))})` : ""} at ${(o.fmtReadX || o.fmtX)(v)}`; };
+    // The left-axis readout: the value, with the band's range when there is one; the x readout is the axis value itself.
+    const readY = (v) => { const r = o.band && o.band(v); return `${o.fmtY(o.f(v))}${r ? ` (${o.fmtY(Math.min(...r))}–${o.fmtY(Math.max(...r))})` : ""}`; };
     const show = (v) => {
-      cv.innerHTML = o.now != null ? nowCaption(o.fmtY(o.f(o.now))) : "";
-      if (v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, W, 0, 0, null); return; }
-      moveTip(svg, W, x(v), y(o.f(v)), read(v));
+      cv.innerHTML = "";
+      if (v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, null, 0, 0, null); return; }
+      moveTip(svg, { L, R, W, H, B }, x(v), y(o.f(v)), { y: readY(v), x: (o.fmtReadX || o.fmtX)(v), right: null });
       cross.setAttribute("x1", x(v)); cross.setAttribute("x2", x(v)); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", x(v)); dot.setAttribute("cy", y(o.f(v))); dot.setAttribute("visibility", "visible");
     };
@@ -316,14 +446,17 @@
     if (head && !head.querySelector("#tailaxis")) head.insertAdjacentHTML("beforeend", `<div class="seg" id="tailaxis" role="group" aria-label="Tail curve axis"><button type="button" data-axis="time" title="x = date reached at the current tail speed">Estimated date</button><button type="button" data-axis="loss" title="x = cumulative losses counted by the mint curve (tail progress)">Counted loss</button></div>`);
     const byTime = tailAxis === "time" && !!(d.mint && d.mint.tailSpeedUsdPerHour > 0);
     for (const b of document.querySelectorAll("#tailaxis button")) b.classList.toggle("on", b.dataset.axis === (byTime ? "time" : "loss"));
+    if (head && !head.querySelector("#horizon")) head.insertAdjacentHTML("beforeend", `<div class="seg" id="horizon" role="group" aria-label="Projection horizon">${HORIZONS.map(([days, l]) => `<button type="button" data-days="${days}" title="projections run ${days} days ahead">${l}</button>`).join("")}</div>`);
+    for (const b of document.querySelectorAll("#horizon button")) b.classList.toggle("on", Number(b.dataset.days) === horizon);
+    // Order: observed-only charts first, then the projections, the hedged-cost model last.
     const figs = [
-      ["pool", "LP Balance"],
-      ["mintcost", "Cost to mint"],
+      ["pool", "LP balance"],
+      ["apr", "APR (trailing 24 h)"],
       ["tailloss", "Counted losses over time"],
       ["minttail", byTime ? "Mint rate over time" : "Mint rate by counted loss"],
       ["supply", byTime ? "PAPER supply over time" : "PAPER supply by counted loss"],
-      ["apr", "APR (trailing 24 h)"],
       ["inflation", "Inflation (trailing 24 h)"],
+      ["mintcost", "Cost to mint"],
     ];
     box.innerHTML = figs.map(([k, t]) => `<figure class="chart" data-curve="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)}"></svg></figure>`).join("");
     const fig = (k) => box.querySelector(`[data-curve="${k}"]`);
@@ -332,9 +465,9 @@
       const ms = d.mint && d.mint.series, pts = ms && ms.trackedLpUsd ? ms.trackedLpUsd.map((v, i) => [ms.startMs + i * ms.intervalMs, v]) : [];
       const dips = (d.mint && d.mint.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
       let showPool = null;
-      fig("pool").title = `dotted lines: mint-decay threshold ${usd(c.threshold)} (flat 100/$ below it) and staker threshold ${usd(c.stakerCap)} (stakers take 99% at or above it)`;
+      setInfo(fig("pool"), `dotted lines: mint-decay threshold ${usd(c.threshold)} (flat 100/$ below it) and staker threshold ${usd(c.stakerCap)} (stakers take 99% at or above it)`);
       // No projection: the pool moves with the traders' net pnl, which cannot be estimated.
-      showPool = timeChart(fig("pool"), pts, usd, (ms) => showPool && showPool(ms), { bands: dips, quiet: true, markNow: true, hlines: [{ x: 0, y: c.threshold, label: usd(c.threshold), kind: "warn", align: "left" }, { y: c.stakerCap, label: usd(c.stakerCap), kind: "pos", align: "left" }] });
+      showPool = timeChart(fig("pool"), pts, usd, (ms) => showPool && showPool(ms), { bands: dips, quiet: true, hlines: [{ x: 0, y: c.threshold, label: usd(c.threshold), kind: "warn", align: "left" }, { y: c.stakerCap, label: usd(c.stakerCap), kind: "pos", align: "left" }] });
     }
     const rateTicks = [c.flatRate, c.flatRate / 2, c.flatRate / 4, 0];
     // Net cost of one PAPER for a hedged pair closed at ±target, over time: (1 − win ratio) ÷ (0.98 × mint rate) on every
@@ -362,11 +495,11 @@
       }
       const pts = [...rebuilt, ...sampled];
       // Projection: realized losses keep growing at the recent tail speed (mint.tailSpeedUsdPerHour), so
-      // T(t) = T_now + speed·Δt and the rate follows flat·(D/(D+T))² — 7 days ahead, hourly. No future cliff dips assumed.
+      // T(t) = T_now + speed·Δt and the rate follows flat·(D/(D+T))² — the horizon ahead (7 days to a year, the Rules switch), hourly. No future cliff dips assumed.
       const future = [], band = [];
       if (m && m.tailSpeedUsdPerHour > 0 && pts.length) {
         const R = c.flatRate, D = c.decayScale, t0 = m.atMs, T0 = m.tailProgressUsd, at = (pace, h) => cost(R * (D / (D + T0 + pace * h)) ** 2);
-        for (let h = 0; h <= 7 * 24; h++) {
+        for (let h = 0; h <= horizon * 24; h++) {
           future.push([t0 + h * 3_600_000, at(m.tailSpeedUsdPerHour, h)]);
           if (m.pace) band.push([t0 + h * 3_600_000, at(m.pace.low, h), at(m.pace.high, h)]);
         }
@@ -376,12 +509,12 @@
       if (rebuilt.length) notes.push(`before ${hourLabel(rebuilt[rebuilt.length - 1][0] + mk.intervalMs)}: rebuilt from the hourly PAPER supply`);
       const dips = (m && m.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
       let showCost = null;
-      showCost = timeChart(fig("mintcost"), pts, (v) => unit(v), (t) => showCost && showCost(t), { bands: dips, quiet: true, markNow: true, future, futureBand: band });
-      if (future.length) notes.push(`next 7 days: dashed line at the recent 6 h pace of losses (${usd(m.tailSpeedUsdPerHour)}/h)${m.pace ? `, band ${usd(m.pace.low)}–${usd(m.pace.high)}/h` : ""}`);
-      fig("mintcost").title = notes.join(" · ");
+      showCost = timeChart(fig("mintcost"), pts, (v) => unit(v), (t) => showCost && showCost(t), { bands: dips, quiet: true, timeLabel: horizonLabel(), future, futureBand: band });
+      if (future.length) notes.push(`next ${horizon} days, if volume and the loss rate stay as they are: dashed line at the median hourly pace of losses over the last 24 h (${usd(m.tailSpeedUsdPerHour)}/h)${m.pace ? `, band = the 25th–75th percentile of those hours (${usd(m.pace.low)}–${usd(m.pace.high)}/h)` : ""}`);
+      setInfo(fig("mintcost"), notes.join(" · "));
     }
     // Realized losses over time: observed tail progress (summary samples; before them rebuilt from the hourly PAPER
-    // supply as above) and the model every projection on this page uses — linear at the recent 6 h pace, with the band
+    // supply as above) and the model every projection on this page uses — linear at the median hourly pace, with the band
     // between the slowest and fastest of the recent 3 h, 6 h and 24 h paces.
     {
       const m = d.mint, ms = m && m.series, mk = d.protocol && d.protocol.market, flat = m && m.flatEmissionPaper;
@@ -401,15 +534,15 @@
       const pts = [...rebuilt, ...sampled], future = [], band = [];
       if (m && m.tailSpeedUsdPerHour > 0 && pts.length) {
         const t0 = m.atMs, T0 = m.tailProgressUsd;
-        for (let h = 0; h <= 7 * 24; h++) {
+        for (let h = 0; h <= horizon * 24; h++) {
           future.push([t0 + h * 3_600_000, T0 + m.tailSpeedUsdPerHour * h]);
           if (m.pace) band.push([t0 + h * 3_600_000, T0 + m.pace.low * h, T0 + m.pace.high * h]);
         }
       }
       let showLoss = null;
-      showLoss = timeChart(fig("tailloss"), pts, usd, (t) => showLoss && showLoss(t), { quiet: true, markNow: true, future, futureBand: band,
+      showLoss = timeChart(fig("tailloss"), pts, usd, (t) => showLoss && showLoss(t), { quiet: true, timeLabel: horizonLabel(), future, futureBand: band,
         hlines: [{ y: c.decayScale * (Math.SQRT2 - 1), label: "½ rate" }, { y: c.decayScale, label: "¼ rate" }] });
-      fig("tailloss").title = `tail progress: the losses the mint curve has counted, each losing close at its mint basis, not netted against wins and not counted while the pool is under the cliff; not the traders' net pnl. Before the samples: rebuilt from supply.${m && m.pace ? ` Projection if the pace holds: dashed at the recent 6 h pace (${usd(m.pace.mid)}/h), band from the slowest to the fastest of the recent 3 h / 6 h / 24 h (${usd(m.pace.low)}–${usd(m.pace.high)}/h); no future cliff dips assumed.` : ""}`;
+      setInfo(fig("tailloss"), `tail progress: the losses the mint curve has counted, each losing close at its mint basis, not netted against wins and not counted while the pool is under the cliff; not the traders' net pnl. Before the samples: rebuilt from supply.${m && m.pace ? ` Projection if volume and the loss rate stay as they are: dashed at the median hourly pace over the last 24 h (${usd(m.pace.mid)}/h), band = the 25th–75th percentile of those hours (${usd(m.pace.low)}–${usd(m.pace.high)}/h); no future cliff dips assumed.` : ""}`);
     }
     // Staking APR at every complete hour: the 24 h ending there (protocol.series.apr, the indexer's trailing-window
     // definition), from its first value. In the first 24 h after PAPER began the window is shorter, so values are extreme.
@@ -423,8 +556,8 @@
       // No projection: rewards come mostly in lumps when the pool is at the staker cap and traders lose, which depends on
       // the traders' pnl and cannot be estimated.
       let showApr = null;
-      showApr = timeChart(fig("apr"), pts, (v) => pct(v, 0), (t) => showApr && showApr(t), { quiet: true, markNow: true, log: true });
-      fig("apr").title = "USDC paid to stakers over the trailing 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER at that hour; from the hourly protocol history, from the first hour with PAPER (the window is shorter than 24 h in the first day). No projection: rewards come in lumps when the pool is at the staker cap and traders lose, which cannot be estimated. Log axis";
+      showApr = timeChart(fig("apr"), pts, bigPct, (t) => showApr && showApr(t), { quiet: true, log: true });
+      setInfo(fig("apr"), "USDC paid to stakers over the trailing 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER at that hour; from the hourly protocol history, from the first hour with PAPER (the window is shorter than 24 h in the first day). No projection: rewards come in lumps when the pool is at the staker cap and traders lose, which cannot be estimated. Log axis");
     }
     const D = c.decayScale, tailEnd = D * (Math.sqrt(c.flatRate) - 1), tailRate = (p) => c.flatRate * (D / (D + p)) ** 2;
     const m = d.mint;
@@ -436,22 +569,21 @@
     };
     const nextHalf = Math.SQRT2 * (D + c.tailProgress) - D;
     const tailMarks = [{ x: D * (Math.SQRT2 - 1), label: "½" }, { x: D, label: "¼" }];
-    if (nextHalf > D * (Math.SQRT2 - 1) * 1.05) tailMarks.push({ x: nextHalf, label: "next ½" });
+    if (nextHalf > D * (Math.SQRT2 - 1) * 1.05) tailMarks.push({ x: nextHalf, label: "Next ½" });
     // Time axis for the two projections: tailProgress grows at the current tail speed; 30 days ahead or until the tail
     // would be exhausted, whichever is sooner. Day ticks at local midnight. Without a speed, fall back to the loss axis.
-    // Time axis for the two projections: tailProgress grows at the central pace (pAt) or the slowest / fastest pace
-    // (pLow / pHigh, the band); 7 days ahead or until the tail would be exhausted. Without a pace, the loss axis is used.
+    // Time axis for the two projections: tailProgress grows at the median pace (pAt) or the 25th / 75th percentile pace
+    // (pLow / pHigh, the band); the horizon ahead, so every projected chart shares one axis. Without a pace, the loss axis is used.
     let axis = null;
     if (byTime) {
-      const lam = m.tailSpeedUsdPerHour, t0 = m.atMs, hoursToEnd = (tailEnd - c.tailProgress) / lam;
-      const t1 = t0 + Math.min(7 * 24, hoursToEnd) * 3_600_000;
+      const lam = m.tailSpeedUsdPerHour, t0 = m.atMs, t1 = t0 + horizon * 24 * 3_600_000;
       const lo = m.pace ? m.pace.low : lam, hi = m.pace ? m.pace.high : lam;
       const at = (pace) => (ms) => c.tailProgress + ((ms - t0) / 3_600_000) * pace;
       axis = { t0, t1, pAt: at(lam), pLow: at(lo), pHigh: at(hi) };
     }
     // Time axis: the past and the projection on one line, like the cost chart above. Before the samples the tail progress
     // is rebuilt from the hourly PAPER supply (T = E·D/(flat·D − E)); the projection runs hourly at the central pace with
-    // the slow–fast band, to axis.t1 (7 days, like the cost and realized-loss charts, so the four time charts share one axis).
+    // the quartile band, to axis.t1 (the horizon, like the cost and realized-loss charts, so the four time charts share one axis).
     const tailRebuilt = (beforeMs) => {
       const mk = d.protocol && d.protocol.market, flat = m && m.flatEmissionPaper, out = [];
       if (!mk || !mk.paperSupply || flat == null) return out;
@@ -474,16 +606,20 @@
       return { future, futureBand: band };
     };
     const dipBands = (m && m.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
+    // The two curves the protocol's parameters define (the other Rules charts carry their own notes).
+    const paceNote = m && m.pace ? ` Projection: the counted losses at the median hourly pace of the last 24 h (${usd(m.pace.mid)}/h), band = its 25th–75th percentile (${usd(m.pace.low)}–${usd(m.pace.high)}/h); no future cliff dips assumed.` : "";
+    setInfo(fig("minttail"), `PAPER minted per $1 of counted loss: ${c.flatRate} × (D ÷ (D + counted losses))², D = ${usd(c.decayScale)}; ${c.flatRate}/$ while the pool is under the cliff.${byTime ? paceNote : " X axis: the counted losses themselves."}`);
+    setInfo(fig("supply"), `PAPER supply: current supply plus what the curve mints as the counted losses grow; it approaches the max supply (${(maxSupply(c) / 1e9).toFixed(2)}B) if the pool never dips below the cliff again.${byTime ? paceNote : " X axis: the counted losses themselves."}`);
     if (axis) {
       // The sampled rate already includes the cliff dips (flat rate while the pool is under the cliff).
       const ms = m.series, sampled = ms && ms.ratePerUsd ? ms.ratePerUsd.map((r, i) => [ms.startMs + i * ms.intervalMs, r]).filter(([, r]) => r != null) : [];
       const past = [...tailRebuilt(sampled.length ? sampled[0][0] : Infinity).map(([at, T]) => [at, tailRate(T)]), ...sampled];
       let showRate = null;
-      showRate = timeChart(fig("minttail"), past, (v) => `${v.toFixed(1)}/$`, (t) => showRate && showRate(t), { quiet: true, markNow: true, bands: dipBands, ...projection(tailRate),
-        hlines: [{ y: tailRate(c.tailProgress) / 2, label: "next ½" }, { y: c.flatRate / 4, label: "¼ rate" }] });
+      showRate = timeChart(fig("minttail"), past, rateFmt, (t) => showRate && showRate(t), { quiet: true, timeLabel: horizonLabel(), bands: dipBands, ...projection(tailRate),
+        hlines: [{ y: tailRate(c.tailProgress) / 2, label: "Next ½" }, { y: c.flatRate / 4, label: "¼ rate" }] });
     } else {
-      curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: (v) => `${v.toFixed(1)}/$`, fmtX: usd, xLabel: "counted", xTicks: lossTicks(tailEnd),
-        markers: tailMarks, now: c.tailProgress });
+      curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: rateFmt, fmtX: usd, xLabel: "counted", xTicks: lossTicks(tailEnd),
+        markers: tailMarks });
     }
     const minted = (p) => (c.flatRate * D * p) / (D + p), base = c.supplyPaper - minted(c.tailProgress), limit = base + c.flatRate * D;
     if (axis) {
@@ -497,15 +633,15 @@
       }
       past.push([axis.t0, c.supplyPaper]);
       let showSupply = null;
-      showSupply = timeChart(fig("supply"), past, (v) => `${(v / 1e9).toFixed(2)}B`, (t) => showSupply && showSupply(t), { quiet: true, markNow: true, ...projection((p) => base + minted(p)),
-        hlines: [{ y: limit, label: `max ${(limit / 1e9).toFixed(2)}B` }] });
+      showSupply = timeChart(fig("supply"), past, supplyFmt, (t) => showSupply && showSupply(t), { quiet: true, timeLabel: horizonLabel(), ...projection((p) => base + minted(p)),
+        hlines: [{ y: limit, label: `Max ${(limit / 1e9).toFixed(2)}B` }] });
     } else {
-      curveChart(fig("supply"), { x0: 0, x1: tailEnd, y0: 0, y1: limit * 1.06, f: (p) => base + minted(p), ticksY: [limit, limit / 2, 0], fmtY: (v) => `${(v / 1e9).toFixed(2)}B`, fmtX: usd, xLabel: "counted",
-        asymptote: limit, asymptoteLabel: `max ${(limit / 1e9).toFixed(2)}B`, xTicks: lossTicks(tailEnd), now: c.tailProgress });
+      curveChart(fig("supply"), { x0: 0, x1: tailEnd, y0: 0, y1: limit * 1.06, f: (p) => base + minted(p), ticksY: [limit, limit / 2, 0], fmtY: supplyFmt, fmtX: usd, xLabel: "counted",
+        asymptote: limit, asymptoteLabel: `Max ${(limit / 1e9).toFixed(2)}B`, xTicks: lossTicks(tailEnd) });
     }
     // Inflation: supply growth over the 24 h ending at each complete hour, S(t) ÷ S(t − 24 h) − 1, from the hourly PAPER
-    // supply (each value is the hour's end). Next 7 days: the same ratio with the model's supply growth (counted losses
-    // at the 6 h pace, band 3 h–24 h), continuous with the observed figure (see below). Log axis: right after launch the
+    // supply (each value is the hour's end). Over the horizon: the same ratio with the model's supply growth (counted losses
+    // at the median pace, band = its quartiles), continuous with the observed figure (see below). Log axis: right after launch the
     // supply 24 h earlier is tiny, so the first values are extreme.
     {
       const mk = d.protocol && d.protocol.market, asOf = d.protocol && d.protocol.asOfMs, hist = new Map();
@@ -516,8 +652,8 @@
       if (pts.length && m && m.pace) {
         // For comparison (temporary): the model alone over the whole range, past and future, drawn over the observed line.
         // Model supply S(t) = base + minted(T(t)) with T(t) = T_now + pace·(t − now), run backward as well as forward;
-        // inflation = S(t) ÷ S(t − 24 h) − 1 on that model supply only. Central line at the 6 h pace, band 3 h–24 h.
-        const tStart = pts[0][0], t1 = pts[pts.length - 1][0] + 7 * DAY;
+        // inflation = S(t) ÷ S(t − 24 h) − 1 on that model supply only. Central line at the median pace, band = quartiles.
+        const tStart = pts[0][0], t1 = pts[pts.length - 1][0] + horizon * DAY;
         const model = (pace) => (t) => base + minted(c.tailProgress + (pace * (t - m.atMs)) / 3_600_000);
         const ratio = (pace, t) => { const M = model(pace), den = M(t - DAY); return den > 0 ? M(t) / den - 1 : null; };
         for (let t = tStart; t <= t1; t += 3_600_000) {
@@ -526,31 +662,36 @@
         }
       }
       let showInf = null;
-      showInf = timeChart(fig("inflation"), pts, (v) => pct(v, v < 0.1 ? 1 : 0), (t) => showInf && showInf(t), { quiet: true, markNow: true, future, futureBand, log: true });
-      fig("inflation").title = "PAPER supply growth over the trailing 24 h at each complete hour (official hourly history). Next 7 days: the same 24 h ratio with the model's supply growth (counted losses at the recent 6 h pace, band 3 h–24 h), starting from the observed figure; the last 24 h's increase is taken as spread evenly while it leaves the window. No future cliff dips assumed. Log axis";
+      showInf = timeChart(fig("inflation"), pts, bigPct, (t) => showInf && showInf(t), { quiet: true, timeLabel: horizonLabel(), future, futureBand, log: true });
+      setInfo(fig("inflation"), "PAPER supply growth over the trailing 24 h at each complete hour (official hourly history). Next " + horizon + " days: the same 24 h ratio with the model's supply growth (counted losses at the median hourly pace of the last 24 h, band = its 25th–75th percentile), starting from the observed figure; the last 24 h's increase is taken as spread evenly while it leaves the window. No future cliff dips assumed. Log axis");
     }
   }
 
   // ------------------------------------------------------------------------------------------ wiring
   // Pace of the counted losses (tail progress per hour) for every projection on the page, from the sampled tail
-  // progress: the recent 6 h as the central case, the recent 3 h and 24 h as the other two; the band runs from the
-  // slowest to the fastest of the three. The indexer's tailSpeedUsdPerHour is the average since sampling began, which
-  // the launch hours inflate, so the page replaces it with the central case.
+  // progress over the last 24 h, binned by hour: the median hourly loss as the central case, the 25th and 75th
+  // percentiles as the band. Backtested on the first two days: a trailing mean (3 h / 6 h / 24 h) ran high while the
+  // pace fell from launch, and the 24 h mean worst (median error −42% over the next 6 h); the median ignores single
+  // large hours and tracks the level the pace has settled at. The indexer's tailSpeedUsdPerHour is the average since
+  // sampling began, which the launch hours inflate, so the page replaces it with the median.
   function withPace(m) {
     const s = m && m.series;
     if (!s || !s.tailProgressUsd) return m;
     const pts = s.tailProgressUsd.map((v, i) => [s.startMs + i * s.intervalMs, v]).filter(([, v]) => v != null && Number.isFinite(v));
     if (pts.length < 2) return m;
-    const last = pts[pts.length - 1];
-    const over = (hours) => {
-      const from = pts.find(([t]) => t >= last[0] - hours * 3_600_000) || pts[0];
-      const h = (last[0] - from[0]) / 3_600_000;
-      return h > 0 ? (last[1] - from[1]) / h : null;
-    };
-    const mid = over(6), r3 = over(3), r24 = over(24);
-    const all = [mid, r3, r24].filter((v) => v != null && v > 0);
-    if (mid == null || !(mid > 0) || !all.length) return m;
-    return { ...m, tailSpeedUsdPerHour: mid, pace: { mid, low: Math.min(...all), high: Math.max(...all), recent3h: r3, recent24h: r24 } };
+    const last = pts[pts.length - 1], H = 3_600_000;
+    // Loss in each of the last 24 whole hours (ending at the last sample), from the sample nearest each boundary.
+    const at = (t) => pts.reduce((b, p) => (Math.abs(p[0] - t) < Math.abs(b[0] - t) ? p : b), pts[0]);
+    const hourly = [];
+    for (let h = 24; h >= 1; h--) {
+      const a = at(last[0] - h * H), b = at(last[0] - (h - 1) * H);
+      if (b[0] > a[0] && b[0] - a[0] <= 1.5 * H) hourly.push((b[1] - a[1]) / ((b[0] - a[0]) / H));
+    }
+    if (hourly.length < 6) return m;
+    const sorted = [...hourly].sort((x, y) => x - y), q = (f) => sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))];
+    const mid = q(0.5), low = q(0.25), high = q(0.75);
+    if (!(mid > 0)) return m;
+    return { ...m, tailSpeedUsdPerHour: mid, pace: { mid, low, high, hours: hourly.length } };
   }
 
   function render(d) {
@@ -561,6 +702,14 @@
     renderRules(dd);
   }
   document.addEventListener("click", (e) => {
+    const hz = e.target.closest("#horizon button[data-days]");
+    if (hz && pb() && pb().data()) {
+      horizon = Number(hz.dataset.days);
+      try { localStorage.setItem("paperboards.horizon", String(horizon)); } catch { /* storage unavailable */ }
+      renderRules({ ...pb().data(), mint: withPace(pb().data().mint) });
+      document.dispatchEvent(new Event("paperboards:horizon")); // app.js redraws the dev-fee chart
+      return;
+    }
     const t = e.target.closest("#tailaxis button[data-axis]");
     if (t && pb() && pb().data()) {
       tailAxis = t.dataset.axis;
@@ -574,5 +723,5 @@
     try { localStorage.setItem("paperboards.period", period); } catch { /* storage unavailable */ }
     renderActivity({ ...pb().data(), mint: withPace(pb().data().mint) });
   });
-  window.paperboardsStats = { render, timeChart, linearProjection, HISTORY_START };
+  window.paperboardsStats = { render, timeChart, linearProjection, setInfo, HISTORY_START, horizon: () => ({ days: horizon, timeLabel: horizonLabel() }) };
 })();

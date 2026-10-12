@@ -16,11 +16,11 @@
     dialog = document.createElement("div");
     dialog.className = "cardmodal";
     dialog.hidden = true;
-    dialog.innerHTML = `<div class="cardbox detailbox" role="dialog" aria-modal="true" aria-label="Wallet pnl">
+    dialog.innerHTML = `<div class="cardbox detailbox" role="dialog" aria-modal="true" aria-label="Wallet PnL">
       <div class="cardhead"><h2 class="dtitle"></h2><button type="button" class="cardclose" aria-label="Close">×</button></div>
       <div class="dbody"></div>
       <div class="cardactions dactions"></div>
-      <p class="cardnote">pnl chart and trade history: the official read-only portfolio view</p>
+      <p class="cardnote">PnL chart and trade history: the official read-only portfolio view</p>
     </div>`;
     document.body.appendChild(dialog);
     const close = () => { dialog.hidden = true; if (opener && opener.isConnected) opener.focus(); };
@@ -44,23 +44,23 @@
     const dlg = ensureDialog();
     dlg.querySelector(".dtitle").textContent = name ? `${name} · ${short(r.address)}` : short(r.address);
     dlg.querySelector(".dbody").innerHTML = [
-      `<div class="dgroup"><h3>pnl</h3>`,
-      line("net pnl", signed(r.netPnl18), tone(r.netPnl18), "trade pnl + staking rewards"),
-      line("trade pnl", signed(r.pnl18), tone(r.pnl18), "realized + unrealized"),
-      line("· realized", signed(r.realizedPnl18), tone(r.realizedPnl18)),
-      line("· unrealized", signed(r.unrealizedPnl18), tone(r.unrealizedPnl18)),
-      line("staking rewards", big(rewards) > 0n ? api.usd18(rewards) : "–", big(rewards) > 0n ? "pos" : "", "claimed + unclaimed"),
-      line("· claimed", api.usd18(r.rewardsClaimed18 ?? "0")),
-      line("· unclaimed", api.usd18(r.rewardsPending18 ?? "0")),
-      `</div><div class="dgroup"><h3>account</h3>`,
-      line("balance", r.balance18 == null ? "–" : api.usd18(r.balance18), "", "account value"),
-      line("paper", api.paperAmt(r.paper18), "", share == null ? "" : `${api.sharePct(share)} of supply`),
-      line("cost / paper", cost == null ? "–" : `${cost < 0 ? "-" : ""}$${Math.abs(cost).toFixed(4)}`, cost != null && cost < 0 ? "pos" : "", "−trade pnl ÷ paper"),
-      line("deposited", api.usd(r.depositedUsdc)),
-      line("withdrawn", big(r.withdrawnUsdc) > 0n ? api.usd(r.withdrawnUsdc) : "–"),
+      `<div class="dgroup"><h3>PnL</h3>`,
+      line("Net PnL", signed(r.netPnl18), tone(r.netPnl18), "trade PnL + staking rewards"),
+      line("Trade PnL", signed(r.pnl18), tone(r.pnl18), "realized + unrealized"),
+      line("· Realized", signed(r.realizedPnl18), tone(r.realizedPnl18)),
+      line("· Unrealized", signed(r.unrealizedPnl18), tone(r.unrealizedPnl18)),
+      line("Staking rewards", big(rewards) > 0n ? api.usd18(rewards) : "–", big(rewards) > 0n ? "pos" : "", "claimed + unclaimed"),
+      line("· Claimed", api.usd18(r.rewardsClaimed18 ?? "0")),
+      line("· Unclaimed", api.usd18(r.rewardsPending18 ?? "0")),
+      `</div><div class="dgroup"><h3>Account</h3>`,
+      line("Balance", r.balance18 == null ? "–" : api.usd18(r.balance18), "", "account value"),
+      line("PAPER", api.paperAmt(r.paper18), "", share == null ? "" : `${api.sharePct(share)} of supply`),
+      line("Cost / PAPER", cost == null ? "–" : `${cost < 0 ? "-" : ""}$${Math.abs(cost).toFixed(4)}`, cost != null && cost < 0 ? "pos" : "", "−trade PnL ÷ PAPER"),
+      line("Deposited", api.usd(r.depositedUsdc)),
+      line("Withdrawn", big(r.withdrawnUsdc) > 0n ? api.usd(r.withdrawnUsdc) : "–"),
       `</div>`,
     ].join("");
-    dlg.querySelector(".dactions").innerHTML = `<a class="primary" href="${OFFICIAL}${r.address}" target="_blank" rel="noopener">PnL chart on papertrade ↗</a>
+    dlg.querySelector(".dactions").innerHTML = `<a class="primary" href="${OFFICIAL}${r.address}" target="_blank" rel="noopener">PnL chart on Papertrade ↗</a>
       <button type="button" class="cardbtn-like" data-card-wallet="${r.address}">Share card</button>
       <a href="${d.explorer}/address/${r.address}" target="_blank" rel="noopener">Explorer ↗</a>`;
     opener = document.activeElement;

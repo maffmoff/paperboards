@@ -32,7 +32,7 @@ import {
   type RawLog,
 } from "./events.js";
 import { buildRanking, makeTimestampInterpolator, type LeaderboardStats } from "./rank.js";
-import { curveParams, marketSeries, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, type CurveParams, type HouseHistory, type ProtocolHistory } from "./protocol.js";
+import { capitalFlows, coarsenHistory, curveParams, marketSeries, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, thinOpenInterest, type CurveParams, type HouseHistory, type ProtocolHistory } from "./protocol.js";
 import { costWindows } from "./cost-windows.js";
 import { MULTICALL3, PENDING_BATCH, decodePendingBatch, encodePendingBatch } from "./pending.js";
 import { appendDevFeeSample, devFeeSummary, type DevFeeSample, type DevFeeSummary } from "./devfee.js";
@@ -266,6 +266,29 @@ async function fetchOpenInterest() {
   }
 }
 
+/**
+ * The last 24 h at 5-minute steps, from the 1-minute histories (the official API serves 1m and 1h, not 5m): protocol
+ * columns coarsened to 5 min (market series, with the time of reading) and open interest thinned to 5 min. Fails soft.
+ */
+const FIVE_MIN = 300_000;
+async function fetchFiveMinute() {
+  const get = async (path: string) => {
+    const res = await fetch(`${ORIGIN}${path}`, { headers: { accept: "application/json" } });
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    return res.json();
+  };
+  try {
+    const asOfMs = Date.now();
+    const h = coarsenHistory((await get("/query/protocol/history?interval=1m")) as ProtocolHistory, FIVE_MIN);
+    const oi = openInterestSeries((await get("/query/house/history?interval=1m")) as HouseHistory);
+    const market = h && marketSeries(h);
+    return { market: market && { ...market, asOfMs }, openInterest: oi && thinOpenInterest(oi, FIVE_MIN) };
+  } catch (e) {
+    console.error(`5-minute history unavailable: ${(e as Error).message}`);
+    return { market: null, openInterest: null };
+  }
+}
+
 /** Hourly protocol history (supply, staked, staking rewards). Fails soft. */
 async function fetchProtocolStats() {
   try {
@@ -457,6 +480,7 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
   const { tvl, curve } = await fetchProtocolSummaryFigures();
   const openInterest = await fetchOpenInterest();
   const protocol = await fetchProtocolStats();
+  const fiveMinute = await fetchFiveMinute();
   const depositors = [...new Set(cp.events.filter((e) => e.kind === "deposit").map((e) => e.user))];
   const pending = await fetchPendingRewards(depositors);
   log(`pending rewards read for ${pending.size}/${depositors.length} depositors`);
@@ -471,6 +495,10 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
   const tsOf = makeTimestampInterpolator(cp.blockTimestamps);
   const { rows, totals } = buildRanking(cp.events, { tsOf, names: enrichment.names, hlNames, stats: enrichment.stats, claims: cp.claims, pending });
   const toTs = cp.blockTimestamps.length ? cp.blockTimestamps[cp.blockTimestamps.length - 1][1] : null;
+  // Deposits and withdrawals per hour since the hourly history begins, and per 5 min over the last 24 h.
+  const nowMs = Date.now(), hourStart = protocol?.market?.startMs ?? Math.floor(nowMs / 3_600_000) * 3_600_000 - 7 * 86_400_000;
+  const flowsOf = (start: number, interval: number) => capitalFlows(cp.events, tsOf, start, interval, nowMs);
+  const capital = { hourly: flowsOf(hourStart, 3_600_000), fiveMinute: flowsOf(Math.floor((nowMs - 86_400_000) / FIVE_MIN) * FIVE_MIN, FIVE_MIN) };
   writeJsonAtomic(RANKING_PATH, {
     generatedAt: new Date().toISOString(),
     chainId: 999,
@@ -489,6 +517,11 @@ export async function runIndexer(opts: IndexOptions = {}): Promise<{ scannedThro
     devFee,
     /** Open interest in USD per market and side, hourly (/query/house/history?interval=1h). */
     openInterest,
+    /** The last 24 h at 5-minute steps (from the 1-minute histories): market series like protocol.market, and open interest. */
+    market5m: fiveMinute.market,
+    openInterest5m: fiveMinute.openInterest,
+    /** USDC deposited (inflow) and withdrawn (outflow) per hour and per 5 min, from the Exchange events. */
+    capitalFlows: capital,
     /** Reward-curve inputs from /query/protocol/summary (official chart definitions; src/depositors/protocol.ts). */
     curve,
     crossCheck: {

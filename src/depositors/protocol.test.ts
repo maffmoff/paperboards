@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { curveParams, marketSeries, mintRateAtLp, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
+import { capitalFlows, coarsenHistory, thinOpenInterest, curveParams, marketSeries, mintRateAtLp, openInterestSeries, periodFlows, periodRates, protocolSeries, protocolStats, stakerSharePct } from "./protocol.js";
 
 const hourly = (values: (i: number) => number, n = 30) => Array.from({ length: n }, (_, i) => values(i));
 const H = 3_600_000;
@@ -163,5 +163,39 @@ describe("openInterestSeries", () => {
   it("sums both sides of both markets per point and drops gaps", () => {
     const o = openInterestSeries({ baseTimeMs: 1000, timeOffsetsMs: [0, H, 2 * H], gapIndices: [1], columns: { bl: [1, 9, 2], bs: [2, 9, 3], el: [3, 9, 4], es: [4, 9, 5] } })!;
     expect(o).toEqual({ times: [1000, 1000 + 2 * H], btcLong: [1, 2], btcShort: [2, 3], ethLong: [3, 4], ethShort: [4, 5], total: [10, 14] });
+  });
+});
+
+describe("coarsenHistory", () => {
+  it("keeps the fine value at each coarse boundary (1 min -> 5 min)", () => {
+    const M = 60_000;
+    // 12 one-minute values starting at minute 3: ends at minutes 4..15; boundaries at 5, 10, 15 -> indices 1, 6, 11.
+    const h = { startMs: 3 * M, intervalMs: M, columns: { volume: Array.from({ length: 12 }, (_, i) => (i + 1) * 10) } };
+    const c = coarsenHistory(h, 5 * M)!;
+    expect(c).toEqual({ startMs: 0, intervalMs: 5 * M, columns: { volume: [20, 70, 120] } });
+  });
+
+  it("returns null when the coarse interval is not a multiple of the fine one", () => {
+    expect(coarsenHistory({ startMs: 0, intervalMs: 7, columns: { a: [1, 2, 3] } }, 10)).toBeNull();
+  });
+});
+
+describe("thinOpenInterest", () => {
+  it("keeps readings at multiples of the interval", () => {
+    const s = { times: [0, 60_000, 300_000, 360_000, 600_000], btcLong: [1, 2, 3, 4, 5], btcShort: [0, 0, 0, 0, 0], ethLong: [0, 0, 0, 0, 0], ethShort: [0, 0, 0, 0, 0], total: [1, 2, 3, 4, 5] };
+    expect(thinOpenInterest(s, 300_000)).toMatchObject({ times: [0, 300_000, 600_000], btcLong: [1, 3, 5] });
+  });
+});
+
+describe("capitalFlows", () => {
+  it("bins deposits and withdrawals (8 dp) by block time", () => {
+    const H = 3_600_000, ts = (b: number) => b; // block number = unix seconds in this test
+    const ev = [
+      { kind: "deposit" as const, amountUsdc: 1_000_00000000n, block: 10 },
+      { kind: "deposit" as const, amountUsdc: 50_00000000n, block: 3_700 },
+      { kind: "withdraw" as const, amountUsdc: 20_00000000n, block: 3_800 },
+      { kind: "deposit" as const, amountUsdc: 1n, block: 99_999 }, // after now: dropped
+    ];
+    expect(capitalFlows(ev, ts, 0, H, 2 * H - 1)).toEqual({ startMs: 0, intervalMs: H, inflow: [1000, 50], outflow: [0, 20] });
   });
 });
