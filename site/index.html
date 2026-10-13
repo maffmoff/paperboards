@@ -12,15 +12,18 @@
 <link rel="manifest" href="site.webmanifest">
 <meta name="theme-color" content="#EDE5D0">
 <link rel="stylesheet" href="style.css">
+<!-- The stored theme choice, applied before the first paint so the page never flashes the other theme. -->
+<script>try { const t = localStorage.getItem("paperboards.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage unavailable */ }</script>
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#leaderboard" aria-label="paperboards"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 96" style="height: 28px; width: auto; display: block;"><text x="0" y="68" fill="#2A2520" style="font: 500 64px/1 var(--sans); letter-spacing: -0.04em;">paperboards<tspan fill="#2D5F3A">_<animate attributeName="opacity" values="1;0" dur="1.1s" calcMode="discrete" repeatCount="indefinite"/></tspan></text></svg></a>
+  <a class="brand" href="#leaderboard" aria-label="paperboards"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 392 96" style="height: 28px; width: auto; display: block;"><text x="0" y="68" fill="var(--ink)" style="font: 500 64px/1 var(--sans); letter-spacing: -0.04em;">paperboards<tspan fill="var(--pos)">_<animate attributeName="opacity" values="1;0" dur="1.1s" calcMode="discrete" repeatCount="indefinite"/></tspan></text></svg></a>
   <nav class="views" aria-label="Pages">
     <a href="#leaderboard" data-view="leaderboard">Leaderboard</a>
     <a href="#stats" data-view="stats">Stats</a>
   </nav>
   <button type="button" class="askgpt" id="askgpt" title="Open ChatGPT with what is on screen and how the page defines it">Ask ChatGPT</button>
+  <button type="button" class="themebtn" id="themebtn" aria-label="Color theme">Auto</button>
   <span class="updated" id="updated"></span>
 </header>
 
@@ -41,11 +44,6 @@
   <section class="panel" data-page="stats">
     <div class="panel-head"><h2>Rules</h2><span class="sub">Fixed protocol parameters and the curves they define · hover to read</span></div>
     <div class="charts charts-2" id="rules-curves"></div>
-  </section>
-
-  <section class="panel" data-page="stats">
-    <div class="panel-head"><h2>Dev fee</h2><span class="sub" id="devfeehint">The team's half of every trading fee (1% of settled pnl) · claim events on the exchange</span></div>
-    <div class="charts charts-2" id="devfeecharts"></div>
   </section>
 
   <section class="panel" data-page="leaderboard">

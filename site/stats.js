@@ -29,7 +29,8 @@
   const HISTORY_START = Date.UTC(2026, 9, 10, 14);
   // Every full chart shares one frame, so plots line up down each column and across the grid: the same height, the same
   // left margin (value axis) and right margin (second axis, kept even on charts without one), the same top and bottom.
-  const FRAME = { H: 150, L: 64, R: 64, T: 8, B: 20 };
+  // T holds the axis titles (what each axis shows: "Cumulative", "TVL", …) above the plot, on every chart alike.
+  const FRAME = { H: 160, L: 64, R: 64, T: 18, B: 20 };
   // Bars are at most this wide, so a few daily buckets do not turn into blocks.
   const MAX_BAR = 24;
   const hourLabel = (ms) => new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -44,10 +45,17 @@
   function renderNow(d) {
     const c = d.curve, m = d.mint, cc = d.crossCheck || {};
     const max = maxSupply(c);
-    // Valuation at what one PAPER costs to mint today (hedged ±target, the Rules chart's figure) × max supply.
-    const cost = m && typeof m.hedgedMintCostUsd === "number" ? m.hedgedMintCostUsd : null;
-    // Staking APR over the 24 h ending at the last complete hour (the same figure as Activity's 1D apr and the Rules chart).
-    const apr = d.protocol && d.protocol.periods && d.protocol.periods["1d"] ? d.protocol.periods["1d"].apr : null;
+    // What one PAPER costs to mint today, as two bounds (the Rules cost chart): the floor for a hedged pair and no hedge.
+    const rNow = c && c.decayScale > 0 ? c.flatRate * (c.decayScale / (c.decayScale + c.tailProgress)) ** 2 : null;
+    const cost = rNow > 0 ? 1 / ((0.98 / (1 - 0.9 * 0.98)) * rNow) : null, costNoHedge = rNow > 0 ? 1 / (0.98 * rNow) : null;
+    // Staking APR over the 24 h ending at the last complete hour: rewards per staked PAPER, annualized, ÷ what one PAPER
+    // costs to mint today with no hedge (the cost basis of a fresh staker, not the all-time average of past minting).
+    const p1d = d.protocol && d.protocol.periods && d.protocol.periods["1d"];
+    const apr = p1d && p1d.rewardPerPaperYear != null && costNoHedge > 0 ? p1d.rewardPerPaperYear / costNoHedge : null;
+    // Payback in days at that same 24 h rate: cost ÷ (USDC per PAPER per day), for both cost bounds. Trailing like APR.
+    const perDay = p1d && p1d.rewardPerPaperYear > 0 ? p1d.rewardPerPaperYear / 365 : null;
+    const payback = perDay && cost > 0 && costNoHedge > 0 ? { hedged: cost / perDay, noHedge: costNoHedge / perDay } : null;
+    const days = (v) => (!Number.isFinite(v) ? "–" : v < 1 ? "<1 d" : v < 10 ? `${v.toFixed(1)} d` : `${Math.round(v).toLocaleString("en-US")} d`);
     // The current point of every Rules chart (the charts themselves carry no marker): pool, cost, counted losses, rate,
     // supply, inflation; the dev fee total comes from app.js's dev-fee data.
     const lpNow = m && m.series && m.series.trackedLpUsd ? m.series.trackedLpUsd.filter((v) => v != null).pop() : null;
@@ -73,10 +81,11 @@
       kpi("Inflation · 24h", pct(inflation, inflation != null && inflation < 0.1 ? 1 : 0), "PAPER supply growth over the last complete 24 h (official hourly history)"),
       kpi("Mint rate", rateNow == null ? "–" : `${rateNow.toFixed(1)}/$`, `PAPER minted per $1 of counted loss: ${c.flatRate} × (D ÷ (D + counted losses))², D = ${usd(c.decayScale)}`),
       kpi("Dev fees accrued", usd(devFee), "the dev half of trading fees since genesis: claimed (exchange events) + unclaimed (devFeeAccumulator)"),
-      kpi("APR · 24h", pct(apr, 0), "USDC paid to stakers over the last complete 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER (−cumulative trader pnl ÷ supply). Rewards come in lumps: a trailing figure, not a forecast"),
+      kpi("APR · 24h", pct(apr, 0), "USDC paid to stakers over the last complete 24 h per staked PAPER, annualized, ÷ today's cost to mint one PAPER with no hedge (1 ÷ (0.98 × mint rate)). Rewards come in lumps: a trailing figure, not a forecast"),
+      kpi("Payback · 24h", payback == null ? "–" : `${days(payback.hedged)} – ${days(payback.noHedge)}`, "days of distributions, at the rate paid to stakers over the last complete 24 h, until one PAPER minted today has returned its cost: from the hedged floor to no hedge. Assumes that rate holds and the supply stays as it is; minting dilutes each PAPER and distributions follow trader losses, so new deposits must keep coming for the payback to be reached"),
       kpi("Max supply ≈", paper(max), "current supply + what the mint curve can still emit, if the pool never dips below the cliff again; liquidations mint up to 2% more, and the owner can change the curve's parameters"),
-      kpi("Cost to mint", unit(cost), `net cost of one PAPER for a BTC long + short pair closed at ±${(m && m.hedgedCostTargetBps) || 15} bps at today's mint rate: (1 − win ratio) ÷ (0.98 × rate)`),
-      kpi("Valuation", max != null && cost != null ? usd(cost * max) : "–", cost != null ? `max supply × today's cost to mint one PAPER (${unit(cost)}: a BTC long + short pair closed at ±${m.hedgedCostTargetBps ?? 15} bps, docs' price-impact model). What minting it all would cost at today's rate, not a market price` : ""),
+      kpi("Cost to mint", `${unit(cost)} – ${unit(costNoHedge)}`, "what one PAPER costs at today's mint rate: from the floor for a hedged long + short pair with the widest exit (the win leg recovers at most 88.2% of the loss: 1 ÷ (8.31 × rate)) to no hedge (1 ÷ (0.98 × rate))"),
+      kpi("Valuation", max != null && cost != null ? `${usd(cost * max)} – ${usd(costNoHedge * max)}` : "–", "max supply × today's cost to mint one PAPER, from the hedged floor to no hedge"),
     ].join("");
   }
 
@@ -90,8 +99,11 @@
   let tailAxis = "time";
   try { const v = localStorage.getItem("paperboards.tailAxis"); if (v === "time" || v === "loss") tailAxis = v; } catch { /* storage unavailable */ }
   // How far the projections run (the Rules "horizon" switch): every time-axis projection and the dev-fee chart share it.
-  const HORIZONS = [[7, "7D"], [30, "30D"], [90, "90D"], [365, "1Y"]];
-  let horizon = 7;
+  const HORIZONS = [[7, "7D"], [30, "30D"], [90, "90D"], [365, "1Y"], [730, "2Y"], [1825, "5Y"]];
+  // Projection points: hourly up to 30 days, every 6 hours up to a year, daily beyond (5 years hourly would be ~44,000
+  // points per line, for a curve that is smooth at that scale).
+  const stepHours = () => (horizon <= 30 ? 1 : horizon <= 365 ? 6 : 24);
+  let horizon = 30;
   try { const v = Number(localStorage.getItem("paperboards.horizon")); if (HORIZONS.some(([d]) => d === v)) horizon = v; } catch { /* storage unavailable */ }
   // Time labels on the projected charts: hour precision up to 30 days, dates with the year beyond that.
   const dayLabel = (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -199,40 +211,51 @@
     $("activityhint").textContent = base;
     const draws = [];
     const hover = (msAt) => { draws.forEach((g) => g(msAt)); $("activityhint").textContent = msAt == null ? base : hourLabel(msAt); };
-    rows.forEach(([, , , points, fmt, bars, overlay], i) => {
+    // What each axis shows, written above it (the readout boxes carry values only).
+    const bucketWord = `Per ${per}`;
+    const AXIS_TITLES = {
+      Volume: { left: bucketWord, right: `Line: ${maLabel}` },
+      TVL: { left: "In ↑ · Out ↓", right: "TVL" },
+      "Trader PnL": { left: bucketWord, right: "Cumulative" },
+      "Staker rewards": { left: bucketWord, right: "Cumulative" },
+      "Open interest": { left: "Opened ↑ · Closed ↓", right: "Open interest" },
+    };
+    rows.forEach(([label, , , points, fmt, bars, overlay], i) => {
       if (!points) return;
-      draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, timeLabel, keepCaption: true, overlay }));
+      draws.push(timeChart(box.querySelector(`.chart[data-i="${i}"]`), points, fmt, hover, { bars, timeLabel, keepCaption: true, overlay, axisTitles: AXIS_TITLES[label] }));
     });
     // The charts share one hover, so leaving any one of them resets all; a chart redrawn under the cursor (the data
     // poll) loses its own leave listener, so the grid resets them too when the cursor leaves it.
     box.onmouseleave = () => hover(null);
   }
 
-  // The hover readouts are axis labels, as on a trading chart: the value in a box on the left axis at the point's
-  // height, the time (or the loss amount on the counted-loss axis) in a box under the x axis at the cursor, a second
-  // series' value in a box on the right axis; a dotted horizontal line joins the point to its value. Nothing floats over
-  // the plot.
-  const TIP = `<g class="tip" visibility="hidden"><line class="crossh"/><rect class="axbox axv" rx="2"/><text class="axlabel axv"/><rect class="axbox axx" rx="2"/><text class="axlabel axx"/><rect class="axbox axr" rx="2"/><text class="axlabel axr"/></g>`;
-  // geom = { L, R, W, H, B }: the plot frame. r = { y, x, right, rightY }: the label texts (right may be null).
+  // The hover readouts are axis labels, as on a trading chart: each value in a box on its axis at its own height (two
+  // values at one time, such as deposits and withdrawals or a bar and its average, get two boxes), the time (or the loss
+  // amount on the counted-loss axis) in a box under the x axis, a second series' value on the right axis; a dotted
+  // horizontal line joins the point to its value. The boxes stay in the margins, never over the plot; what each axis
+  // shows is named by its axis title (axisTitles), not inside the box.
+  const TIP = `<g class="tip" visibility="hidden"><line class="crossh"/><g class="axboxes"></g></g>`;
+  // geom = { L, R, W, H, T, B }: the plot frame. r = { left: [{ text, y }], x: text, right: [{ text, y }] }.
   function moveTip(svg, geom, px, py, r) {
     const g = svg.querySelector(".tip"); if (!g) return;
     if (r == null) { g.setAttribute("visibility", "hidden"); return; }
-    const { L, R, W, H, B } = geom;
-    const place = (cls, text, tx, ty, anchor) => {
-      const t = g.querySelector(`text.${cls}`), b = g.querySelector(`rect.${cls}`);
-      if (text == null) { t.setAttribute("visibility", "hidden"); b.setAttribute("visibility", "hidden"); return; }
-      const w = text.length * 5.6 + 8;
-      t.textContent = text; t.setAttribute("x", tx.toFixed(1)); t.setAttribute("y", (ty + 3.5).toFixed(1)); t.setAttribute("text-anchor", anchor);
-      b.setAttribute("x", (anchor === "end" ? tx - w + 4 : anchor === "middle" ? tx - w / 2 : tx - 4).toFixed(1)); b.setAttribute("y", (ty - 6.5).toFixed(1)); b.setAttribute("width", w.toFixed(1)); b.setAttribute("height", "13");
-      t.setAttribute("visibility", "visible"); b.setAttribute("visibility", "visible");
+    const { L, R, W, H, T, B } = geom, boxH = 13, cw = 5.6;
+    // Values on one axis, top to bottom, at least a box apart, inside the plot's height.
+    const lane = (items) => {
+      const out = items.filter((it) => it && it.text).map((it) => ({ ...it, y: Math.max(T + boxH / 2, Math.min(H - B - boxH / 2, it.y)) })).sort((a, b) => a.y - b.y);
+      for (let k = 1; k < out.length; k++) out[k].y = Math.max(out[k].y, out[k - 1].y + boxH + 1);
+      const over = out.length ? out[out.length - 1].y - (H - B - boxH / 2) : 0;
+      if (over > 0) for (const it of out) it.y -= over;
+      return out;
     };
-    // A box wider than its axis margin would be clipped at the svg edge, so it sits just inside the plot instead.
-    const yc = Math.max(9, Math.min(H - B - 2, py)), fitsLeft = r.y.length * 5.6 + 8 <= L - 2;
-    place("axv", r.y, fitsLeft ? L - 6 : L + 6, yc, fitsLeft ? "end" : "start");
-    const w = r.x.length * 5.6 + 8, cx = Math.max(L + w / 2, Math.min(W - R - w / 2, px));
-    place("axx", r.x, cx, H - 8, "middle");
-    const fitsRight = !r.right || r.right.length * 5.6 + 8 <= R - 2;
-    place("axr", r.right, fitsRight ? W - R + 6 : W - R - 6, r.right ? Math.max(9, Math.min(H - B - 2, r.rightY)) : 0, fitsRight ? "start" : "end");
+    const box = (text, tx, ty, anchor) => {
+      const w = text.length * cw + 8, bx = anchor === "end" ? tx - w + 4 : anchor === "middle" ? tx - w / 2 : tx - 4;
+      return `<rect class="axbox" rx="2" x="${bx.toFixed(1)}" y="${(ty - 6.5).toFixed(1)}" width="${w.toFixed(1)}" height="${boxH}"/><text class="axlabel" x="${tx.toFixed(1)}" y="${(ty + 3.5).toFixed(1)}" text-anchor="${anchor}">${esc(text)}</text>`;
+    };
+    const w = r.x.length * cw + 8, cx = Math.max(L + w / 2, Math.min(W - R - w / 2, px));
+    g.querySelector(".axboxes").innerHTML = lane(r.left).map((it) => box(it.text, L - 6, it.y, "end")).join("")
+      + lane(r.right || []).map((it) => box(it.text, W - R + 6, it.y, "start")).join("")
+      + box(r.x, cx, H - 8, "middle");
     const h = g.querySelector("line.crossh"); h.setAttribute("x1", L); h.setAttribute("x2", W - R); h.setAttribute("y1", py.toFixed(1)); h.setAttribute("y2", py.toFixed(1));
     g.setAttribute("visibility", "visible");
   }
@@ -249,6 +272,13 @@
     const t0 = points[0][0], t1 = future.length ? future[future.length - 1][0] : points[points.length - 1][0];
     let lo = Math.min(0, ...pts.map(([, v]) => v)), hi = Math.max(0, ...pts.map(([, v]) => v));
     for (const [, a, b] of fband) { lo = Math.min(lo, a, b); hi = Math.max(hi, a, b); }
+    // opts.series2 = { points, future, band, label }: a second line on the same value scale (e.g. two cost bounds), drawn
+    // in the warm color with its own dashed projection and band; included in the range and in the hover readout.
+    const fin = (arr) => (arr || []).filter(([, v]) => v != null && Number.isFinite(v));
+    const s2 = opts.series2 || null, s2past = s2 ? fin(s2.points) : [], s2fut = s2 ? fin(s2.future) : [];
+    const s2band = s2 ? (s2.band || []).filter(([, a, b]) => Number.isFinite(a) && Number.isFinite(b)) : [];
+    for (const [, v] of [...s2past, ...s2fut]) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    for (const [, a, b] of s2band) { lo = Math.min(lo, a, b); hi = Math.max(hi, a, b); }
     for (const h of opts.hlines || []) { lo = Math.min(lo, h.y); hi = Math.max(hi, h.y); }
     if (lo === hi) hi = lo + 1;
     const pad = (hi - lo) * 0.08; lo -= lo < 0 ? pad : 0; hi += pad;
@@ -263,7 +293,7 @@
     // powers of ten, at most 5. Non-positive values sit on the bottom edge.
     let tr = (v) => v, sLo = lo, sHi = hi;
     if (opts.log) {
-      const vals = [...pts.map(([, v]) => v), ...fband.flatMap(([, a, b]) => [a, b])].filter((v) => v > 0);
+      const vals = [...pts.map(([, v]) => v), ...fband.flatMap(([, a, b]) => [a, b]), ...s2past.map(([, v]) => v), ...s2fut.map(([, v]) => v), ...s2band.flatMap(([, a, b]) => [a, b])].filter((v) => v > 0);
       const e0 = Math.floor(Math.log10(Math.min(...vals))), e1 = Math.max(e0 + 1, Math.ceil(Math.log10(Math.max(...vals))));
       tr = (v) => Math.log10(Math.max(v, 10 ** e0)); sLo = e0; sHi = e1;
       const step = Math.ceil((e1 - e0) / 4);
@@ -308,6 +338,7 @@
       let path = "", pen = false;
       for (const [ms, v] of points) { if (v == null || !Number.isFinite(v)) { pen = false; continue; } path += `${pen ? "L" : "M"}${x(ms).toFixed(1)},${y(v).toFixed(1)}`; pen = true; }
       marks = `<path class="line" d="${path}"/>`;
+      if (s2past.length) marks += `<path class="line s2" d="${s2past.map(([ms, v], i) => `${i ? "L" : "M"}${x(ms).toFixed(1)},${y(v).toFixed(1)}`).join("")}"/>`;
       if (future.length) {
         // The model is its own line, not joined to the last observed point: it starts at the model's value "now" (the
         // projections include h = 0), which equals the observed value unless the model differs from it (e.g. inflation).
@@ -317,6 +348,13 @@
           marks += `<polygon class="projband" points="${top.join(" ")} ${bot.join(" ")}"/>`;
         }
         marks += `<path class="line proj" d="${proj}"/><line class="vmark" x1="${x(nowMs).toFixed(1)}" x2="${x(nowMs).toFixed(1)}" y1="${T}" y2="${H - B}"/>`;
+        if (s2fut.length) {
+          if (s2band.length) {
+            const t2 = s2band.map(([ms, a, b]) => `${x(ms).toFixed(1)},${y(Math.max(a, b)).toFixed(1)}`), b2 = s2band.map(([ms, a, b]) => `${x(ms).toFixed(1)},${y(Math.min(a, b)).toFixed(1)}`).reverse();
+            marks += `<polygon class="projband s2" points="${t2.join(" ")} ${b2.join(" ")}"/>`;
+          }
+          marks += `<path class="line proj s2" d="${s2fut.map(([ms, v], i) => `${i ? "L" : "M"}${x(ms).toFixed(1)},${y(v).toFixed(1)}`).join("")}"/>`;
+        }
       }
     }
     const bands = (opts.bands || []).filter(([a, b]) => b >= t0 && a <= t1).map(([a, b, dp]) => {
@@ -335,6 +373,8 @@
         const end = t1 - t0 >= 3 * 86_400_000 ? (ms) => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", ...(t1 - t0 > 60 * 86_400_000 ? { year: "numeric" } : {}) }) : tl;
         return `<text class="tick" x="${L}" y="${H - 5}">${esc(end(t0))}</text><text class="tick" x="${W - R}" y="${H - 5}" text-anchor="end">${esc(end(t1))}</text>`;
       })())
+      // Axis titles in the top band: left over the value axis, right over the second axis.
+      + (opts.axisTitles && !opts.compact ? `${opts.axisTitles.left ? `<text class="axtitle" x="4" y="10">${esc(opts.axisTitles.left)}</text>` : ""}${opts.axisTitles.right ? `<text class="axtitle" x="${W - 4}" y="10" text-anchor="end">${esc(opts.axisTitles.right)}</text>` : ""}` : "")
       + bands + marks
       + (ov.length ? (() => {
         const oy = oSame ? y : (v) => T + (1 - (v - oLo) / (oHi - oLo)) * (H - T - B);
@@ -345,23 +385,25 @@
     const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
     const nearest = (ms) => pts.reduce((best, p) => (Math.abs(p[0] - ms) < Math.abs(best[0] - ms) ? p : best), pts[0]);
     const show = (ms) => {
-      const p = ms == null ? pts[pts.length - 1] : nearest(ms);
+      // Without a cursor the crosshair rests on the current point: the last observed one (the last bar on bar charts),
+      // not the end of a projection.
+      const p = ms == null ? past[past.length - 1] : nearest(ms);
       // Compact sparklines keep the caption readout (the Activity rows share one hover); full charts use the cursor label.
       if (opts.compact) cv.textContent = ms == null ? "" : fmt(p[1]);
       else if (!opts.keepCaption) cv.innerHTML = "";
-      if (ms == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, null, 0, 0, null); return; }
+      if (opts.compact && ms == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, null, 0, 0, null); return; }
       cross.setAttribute("x1", x(p[0])); cross.setAttribute("x2", x(p[0])); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", x(p[0])); dot.setAttribute("cy", y(p[1])); dot.setAttribute("visibility", opts.bars ? "hidden" : "visible");
       const o = ov.length ? ov.reduce((b, q) => (Math.abs(q[0] - p[0]) < Math.abs(b[0] - p[0]) ? q : b), ov[0]) : null;
-      // Two bars at one time (deposits up, withdrawals down): read both.
-      const twin = pts.filter((q) => q[0] === p[0]), head = twin.length > 1 ? twin.map((q) => `${q[2] || ""} ${fmt(q[1])}`.trim()).join(" / ") : fmt(p[1]);
+      // Two bars at one time (deposits up, withdrawals down) read as two boxes at their own heights.
+      const twin = pts.filter((q) => q[0] === p[0] && q[2]), vals = twin.length > 1 ? twin : [p];
       if (!opts.compact) {
         const oy = o && !oSame ? T + (1 - (o[1] - oLo) / (oHi - oLo)) * (H - T - B) : null;
-        // A same-scale overlay (moving average) reads with the value; a second-axis one reads on the right axis.
-        moveTip(svg, { L, R, W, H, B }, x(p[0]), y(p[1]), {
-          y: o && oSame ? `${head} · ${opts.overlay.label} ${opts.overlay.fmt(o[1])}` : head,
+        // A same-scale overlay (moving average) reads on the left axis next to the bar; a second-axis one on the right.
+        moveTip(svg, { L, R, W, H, T, B }, x(p[0]), y(p[1]), {
+          left: [...vals.map((q) => ({ text: fmt(q[1]), y: y(q[1]) })), ...((s2past.length || s2fut.length) ? (() => { const all = [...s2past, ...s2fut], q = all.reduce((b, r) => (Math.abs(r[0] - p[0]) < Math.abs(b[0] - p[0]) ? r : b), all[0]); return [{ text: fmt(q[1]), y: y(q[1]) }]; })() : []), ...(o && oSame ? [{ text: opts.overlay.fmt(o[1]), y: y(o[1]) }] : [])],
           x: `${(opts.timeLabel || hourLabel)(p[0])}${p[0] > nowMs ? " · projected" : ""}`,
-          right: o && !oSame ? `${opts.overlay.label || "total"} ${opts.overlay.fmt(o[1])}` : null, rightY: oy,
+          right: o && !oSame ? [{ text: opts.overlay.fmt(o[1]), y: oy }] : [],
         });
       }
     };
@@ -425,12 +467,12 @@
       + bandPoly + `<path class="line" d="${d}"/>`
       + `<line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/>${TIP}<rect class="hit" x="${L}" y="0" width="${W - L - R}" height="${H}"/>`;
     const cross = svg.querySelector(".cross"), dot = svg.querySelector(".dot"), hit = svg.querySelector(".hit");
-    // The left-axis readout: the value, with the band's range when there is one; the x readout is the axis value itself.
-    const readY = (v) => { const r = o.band && o.band(v); return `${o.fmtY(o.f(v))}${r ? ` (${o.fmtY(Math.min(...r))}–${o.fmtY(Math.max(...r))})` : ""}`; };
-    const show = (v) => {
+    const show = (cursor) => {
       cv.innerHTML = "";
+      // Without a cursor the crosshair rests on the current position (o.now: today's counted losses on that axis).
+      const v = cursor == null ? o.now : cursor;
       if (v == null) { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); moveTip(svg, null, 0, 0, null); return; }
-      moveTip(svg, { L, R, W, H, B }, x(v), y(o.f(v)), { y: readY(v), x: (o.fmtReadX || o.fmtX)(v), right: null });
+      moveTip(svg, { L, R, W, H, T, B }, x(v), y(o.f(v)), { left: [{ text: o.fmtY(o.f(v)), y: y(o.f(v)) }], x: (o.fmtReadX || o.fmtX)(v), right: [] });
       cross.setAttribute("x1", x(v)); cross.setAttribute("x2", x(v)); cross.setAttribute("visibility", "visible");
       dot.setAttribute("cx", x(v)); dot.setAttribute("cy", y(o.f(v))); dot.setAttribute("visibility", "visible");
     };
@@ -448,15 +490,15 @@
     for (const b of document.querySelectorAll("#tailaxis button")) b.classList.toggle("on", b.dataset.axis === (byTime ? "time" : "loss"));
     if (head && !head.querySelector("#horizon")) head.insertAdjacentHTML("beforeend", `<div class="seg" id="horizon" role="group" aria-label="Projection horizon">${HORIZONS.map(([days, l]) => `<button type="button" data-days="${days}" title="projections run ${days} days ahead">${l}</button>`).join("")}</div>`);
     for (const b of document.querySelectorAll("#horizon button")) b.classList.toggle("on", Number(b.dataset.days) === horizon);
-    // Order: observed-only charts first, then the projections, the hedged-cost model last.
+    // Order: observed-only charts first, then the projections, the cost bounds last.
     const figs = [
       ["pool", "LP balance"],
-      ["apr", "APR (trailing 24 h)"],
+      ["apr", "APR · 24h"],
       ["tailloss", "Counted losses over time"],
       ["minttail", byTime ? "Mint rate over time" : "Mint rate by counted loss"],
       ["supply", byTime ? "PAPER supply over time" : "PAPER supply by counted loss"],
-      ["inflation", "Inflation (trailing 24 h)"],
-      ["mintcost", "Cost to mint"],
+      ["devfee", "Dev fees accrued, cumulative"],
+      ["mintcost", "Cost to mint: no hedge and floor"],
     ];
     box.innerHTML = figs.map(([k, t]) => `<figure class="chart" data-curve="${k}"><figcaption><span>${esc(t)}</span><b class="cv"></b></figcaption><svg role="img" aria-label="${esc(t)}"></svg></figure>`).join("");
     const fig = (k) => box.querySelector(`[data-curve="${k}"]`);
@@ -473,8 +515,12 @@
     // Net cost of one PAPER for a hedged pair closed at ±target, over time: (1 − win ratio) ÷ (0.98 × mint rate) on every
     // mint-rate sample. The win ratio depends only on the ±target, so it is the same at every point; cliff dips shaded.
     {
-      const m = d.mint, ms = m && m.series, win = m && typeof m.hedgedWinRatio === "number" ? m.hedgedWinRatio : null;
-      const cost = (r) => (r > 0 && win != null ? (1 - win) / (0.98 * r) : null);
+      // Two bounds on what one PAPER costs at a given mint rate r: no hedge = 1 ÷ (0.98·r) (a lone position, the whole
+      // loss buys PAPER at 98%); floor = 1 ÷ (8.31·r) (a hedged pair with an exit so wide the win leg recovers its cap,
+      // 90% impact × (1 − 2% win fee) = 88.2%: PAPER per $ of net loss ≤ 0.98 ÷ 0.118 · r). Both are ∝ 1/r, ratio 8.48.
+      const m = d.mint, ms = m && m.series;
+      const FLOOR_K = 0.98 / (1 - 0.9 * 0.98);
+      const cost = (r) => (r > 0 ? 1 / (FLOOR_K * r) : null), costNoHedge = (r) => (r > 0 ? 1 / (0.98 * r) : null);
       const sampled = ms && ms.ratePerUsd ? ms.ratePerUsd.map((r, i) => [ms.startMs + i * ms.intervalMs, cost(r)]) : [];
       // Before the samples begin, rebuild the rate from the hourly PAPER supply: past the flat phase the tail has minted
       // flat·D·T/(D+T), so T = E·D/(flat·D − E) with E = supply − flat-phase emission, and rate = flat·(D/(D+T))².
@@ -494,12 +540,13 @@
         }
       }
       const pts = [...rebuilt, ...sampled];
+      const NH = FLOOR_K / 0.98, upper = (arr) => arr.map((q) => (q[1] == null ? [q[0], null] : q.length > 2 ? [q[0], q[1] * NH, q[2] * NH] : [q[0], q[1] * NH]));
       // Projection: realized losses keep growing at the recent tail speed (mint.tailSpeedUsdPerHour), so
       // T(t) = T_now + speed·Δt and the rate follows flat·(D/(D+T))² — the horizon ahead (7 days to a year, the Rules switch), hourly. No future cliff dips assumed.
       const future = [], band = [];
       if (m && m.tailSpeedUsdPerHour > 0 && pts.length) {
         const R = c.flatRate, D = c.decayScale, t0 = m.atMs, T0 = m.tailProgressUsd, at = (pace, h) => cost(R * (D / (D + T0 + pace * h)) ** 2);
-        for (let h = 0; h <= horizon * 24; h++) {
+        for (let h = 0; h <= horizon * 24; h += stepHours()) {
           future.push([t0 + h * 3_600_000, at(m.tailSpeedUsdPerHour, h)]);
           if (m.pace) band.push([t0 + h * 3_600_000, at(m.pace.low, h), at(m.pace.high, h)]);
         }
@@ -509,8 +556,10 @@
       if (rebuilt.length) notes.push(`before ${hourLabel(rebuilt[rebuilt.length - 1][0] + mk.intervalMs)}: rebuilt from the hourly PAPER supply`);
       const dips = (m && m.dips || []).map((dp) => [Date.parse(dp.fromAt), dp.toAt ? Date.parse(dp.toAt) : Date.now(), dp]);
       let showCost = null;
-      showCost = timeChart(fig("mintcost"), pts, (v) => unit(v), (t) => showCost && showCost(t), { bands: dips, quiet: true, timeLabel: horizonLabel(), future, futureBand: band });
+      showCost = timeChart(fig("mintcost"), pts, (v) => unit(v), (t) => showCost && showCost(t), { bands: dips, quiet: true, log: true, timeLabel: horizonLabel(), future, futureBand: band,
+        series2: { points: upper(pts), future: upper(future), band: band.map(([t, a, b]) => [t, a * NH, b * NH]) } });
       if (future.length) notes.push(`next ${horizon} days, if volume and the loss rate stay as they are: dashed line at the median hourly pace of losses over the last 24 h (${usd(m.tailSpeedUsdPerHour)}/h)${m.pace ? `, band = the 25th–75th percentile of those hours (${usd(m.pace.low)}–${usd(m.pace.high)}/h)` : ""}`);
+      notes.unshift("upper line (warm) = no hedge, 1 ÷ (0.98 × mint rate); lower line = the floor for a hedged pair, 1 ÷ (8.31 × mint rate): the widest exit, where the win leg recovers at most 90% × 98% = 88.2% of the loss; any hedged miner pays between the two, and the ratio is 8.48 at every rate");
       setInfo(fig("mintcost"), notes.join(" · "));
     }
     // Realized losses over time: observed tail progress (summary samples; before them rebuilt from the hourly PAPER
@@ -534,7 +583,7 @@
       const pts = [...rebuilt, ...sampled], future = [], band = [];
       if (m && m.tailSpeedUsdPerHour > 0 && pts.length) {
         const t0 = m.atMs, T0 = m.tailProgressUsd;
-        for (let h = 0; h <= horizon * 24; h++) {
+        for (let h = 0; h <= horizon * 24; h += stepHours()) {
           future.push([t0 + h * 3_600_000, T0 + m.tailSpeedUsdPerHour * h]);
           if (m.pace) band.push([t0 + h * 3_600_000, T0 + m.pace.low * h, T0 + m.pace.high * h]);
         }
@@ -544,20 +593,25 @@
         hlines: [{ y: c.decayScale * (Math.SQRT2 - 1), label: "½ rate" }, { y: c.decayScale, label: "¼ rate" }] });
       setInfo(fig("tailloss"), `tail progress: the losses the mint curve has counted, each losing close at its mint basis, not netted against wins and not counted while the pool is under the cliff; not the traders' net pnl. Before the samples: rebuilt from supply.${m && m.pace ? ` Projection if volume and the loss rate stay as they are: dashed at the median hourly pace over the last 24 h (${usd(m.pace.mid)}/h), band = the 25th–75th percentile of those hours (${usd(m.pace.low)}–${usd(m.pace.high)}/h); no future cliff dips assumed.` : ""}`);
     }
-    // Staking APR at every complete hour: the 24 h ending there (protocol.series.apr, the indexer's trailing-window
-    // definition), from its first value. In the first 24 h after PAPER began the window is shorter, so values are extreme.
+    // Staking APR at every complete hour: the 24 h ending there, rewards per staked PAPER annualized (the indexer's
+    // series.apr × series.avgCost gives that back) ÷ the no-hedge cost to mint at that hour, 1 ÷ (0.98 × rate), with the
+    // rate rebuilt from the hourly PAPER supply as on the cost chart. In the first 24 h after PAPER began the window is
+    // shorter, so values are extreme.
     {
-      const s = d.protocol && d.protocol.series, asOf = d.protocol && d.protocol.asOfMs;
+      const s = d.protocol && d.protocol.series, asOf = d.protocol && d.protocol.asOfMs, mk = d.protocol && d.protocol.market;
+      const flat = d.mint && d.mint.flatEmissionPaper, rateAtEnd = new Map(); // d.mint: renderRules declares its own m further down
+      if (mk && mk.paperSupply && flat != null) mk.paperSupply.forEach((v, i) => { const E = v - flat, T = E > 0 ? (E * c.decayScale) / (c.flatRate * c.decayScale - E) : 0; rateAtEnd.set(mk.startMs + (i + 1) * mk.intervalMs, c.flatRate * (c.decayScale / (c.decayScale + T)) ** 2); });
       const pts = [];
-      if (s && s.apr) s.apr.forEach((v, i) => {
-        const end = s.startMs + (i + 1) * s.intervalMs; // each hourly value is the reading at the hour's end
-        if (end >= HISTORY_START && v != null && Number.isFinite(v) && !(asOf && end > asOf)) pts.push([end, v]);
+      if (s && s.apr && s.avgCost) s.apr.forEach((v, i) => {
+        const end = s.startMs + (i + 1) * s.intervalMs, r = rateAtEnd.get(end), ac = s.avgCost[i];
+        if (!(end >= HISTORY_START) || v == null || !Number.isFinite(v) || !(ac > 0) || !(r > 0) || (asOf && end > asOf)) return;
+        pts.push([end, (v * ac) / (1 / (0.98 * r))]);
       });
       // No projection: rewards come mostly in lumps when the pool is at the staker cap and traders lose, which depends on
       // the traders' pnl and cannot be estimated.
       let showApr = null;
       showApr = timeChart(fig("apr"), pts, bigPct, (t) => showApr && showApr(t), { quiet: true, log: true });
-      setInfo(fig("apr"), "USDC paid to stakers over the trailing 24 h per staked PAPER, annualized, ÷ the all-time average cost per PAPER at that hour; from the hourly protocol history, from the first hour with PAPER (the window is shorter than 24 h in the first day). No projection: rewards come in lumps when the pool is at the staker cap and traders lose, which cannot be estimated. Log axis");
+      setInfo(fig("apr"), "USDC paid to stakers over the trailing 24 h per staked PAPER, annualized, ÷ the cost to mint one PAPER with no hedge at that hour (1 ÷ (0.98 × mint rate), rate rebuilt from the hourly supply); from the hourly protocol history, from the first hour with PAPER (the window is shorter than 24 h in the first day). No projection: rewards come in lumps when the pool is at the staker cap and traders lose, which cannot be estimated. Log axis");
     }
     const D = c.decayScale, tailEnd = D * (Math.sqrt(c.flatRate) - 1), tailRate = (p) => c.flatRate * (D / (D + p)) ** 2;
     const m = d.mint;
@@ -599,7 +653,7 @@
     };
     const projection = (f) => {
       const future = [], band = [];
-      for (let t = axis.t0; t <= axis.t1; t += 3_600_000) {
+      for (let t = axis.t0; t <= axis.t1; t += stepHours() * 3_600_000) {
         future.push([t, f(axis.pAt(t))]);
         if (m.pace) band.push([t, f(axis.pLow(t)), f(axis.pHigh(t))]);
       }
@@ -618,7 +672,7 @@
       showRate = timeChart(fig("minttail"), past, rateFmt, (t) => showRate && showRate(t), { quiet: true, timeLabel: horizonLabel(), bands: dipBands, ...projection(tailRate),
         hlines: [{ y: tailRate(c.tailProgress) / 2, label: "Next ½" }, { y: c.flatRate / 4, label: "¼ rate" }] });
     } else {
-      curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: rateFmt, fmtX: usd, xLabel: "counted", xTicks: lossTicks(tailEnd),
+      curveChart(fig("minttail"), { x0: 0, x1: tailEnd, y0: 0, y1: c.flatRate * 1.08, f: tailRate, ticksY: rateTicks, fmtY: rateFmt, fmtX: usd, xLabel: "counted", xTicks: lossTicks(tailEnd), now: c.tailProgress,
         markers: tailMarks });
     }
     const minted = (p) => (c.flatRate * D * p) / (D + p), base = c.supplyPaper - minted(c.tailProgress), limit = base + c.flatRate * D;
@@ -637,34 +691,10 @@
         hlines: [{ y: limit, label: `Max ${(limit / 1e9).toFixed(2)}B` }] });
     } else {
       curveChart(fig("supply"), { x0: 0, x1: tailEnd, y0: 0, y1: limit * 1.06, f: (p) => base + minted(p), ticksY: [limit, limit / 2, 0], fmtY: supplyFmt, fmtX: usd, xLabel: "counted",
-        asymptote: limit, asymptoteLabel: `Max ${(limit / 1e9).toFixed(2)}B`, xTicks: lossTicks(tailEnd) });
+        asymptote: limit, asymptoteLabel: `Max ${(limit / 1e9).toFixed(2)}B`, xTicks: lossTicks(tailEnd), now: c.tailProgress });
     }
-    // Inflation: supply growth over the 24 h ending at each complete hour, S(t) ÷ S(t − 24 h) − 1, from the hourly PAPER
-    // supply (each value is the hour's end). Over the horizon: the same ratio with the model's supply growth (counted losses
-    // at the median pace, band = its quartiles), continuous with the observed figure (see below). Log axis: right after launch the
-    // supply 24 h earlier is tiny, so the first values are extreme.
-    {
-      const mk = d.protocol && d.protocol.market, asOf = d.protocol && d.protocol.asOfMs, hist = new Map();
-      if (mk && mk.paperSupply) mk.paperSupply.forEach((v, i) => { const end = mk.startMs + (i + 1) * mk.intervalMs; if (!(asOf && end > asOf) && Number.isFinite(v)) hist.set(end, v); });
-      const times = [...hist.keys()].sort((a, b) => a - b), DAY = 86_400_000, pts = [];
-      for (const t of times) { const prev = hist.get(t - DAY); if (t >= HISTORY_START && prev > 0) pts.push([t, hist.get(t) / prev - 1]); }
-      const future = [], futureBand = [];
-      if (pts.length && m && m.pace) {
-        // For comparison (temporary): the model alone over the whole range, past and future, drawn over the observed line.
-        // Model supply S(t) = base + minted(T(t)) with T(t) = T_now + pace·(t − now), run backward as well as forward;
-        // inflation = S(t) ÷ S(t − 24 h) − 1 on that model supply only. Central line at the median pace, band = quartiles.
-        const tStart = pts[0][0], t1 = pts[pts.length - 1][0] + horizon * DAY;
-        const model = (pace) => (t) => base + minted(c.tailProgress + (pace * (t - m.atMs)) / 3_600_000);
-        const ratio = (pace, t) => { const M = model(pace), den = M(t - DAY); return den > 0 ? M(t) / den - 1 : null; };
-        for (let t = tStart; t <= t1; t += 3_600_000) {
-          future.push([t, ratio(m.pace.mid, t)]);
-          futureBand.push([t, ratio(m.pace.low, t), ratio(m.pace.high, t)]);
-        }
-      }
-      let showInf = null;
-      showInf = timeChart(fig("inflation"), pts, bigPct, (t) => showInf && showInf(t), { quiet: true, timeLabel: horizonLabel(), future, futureBand, log: true });
-      setInfo(fig("inflation"), "PAPER supply growth over the trailing 24 h at each complete hour (official hourly history). Next " + horizon + " days: the same 24 h ratio with the model's supply growth (counted losses at the median hourly pace of the last 24 h, band = its 25th–75th percentile), starting from the observed figure; the last 24 h's increase is taken as spread evenly while it leaves the window. No future cliff dips assumed. Log axis");
-    }
+    // The dev-fee figure in this grid is drawn by app.js (it owns the dev-fee data); tell it the grid was rebuilt.
+    document.dispatchEvent(new Event("paperboards:rules"));
   }
 
   // ------------------------------------------------------------------------------------------ wiring
@@ -707,7 +737,6 @@
       horizon = Number(hz.dataset.days);
       try { localStorage.setItem("paperboards.horizon", String(horizon)); } catch { /* storage unavailable */ }
       renderRules({ ...pb().data(), mint: withPace(pb().data().mint) });
-      document.dispatchEvent(new Event("paperboards:horizon")); // app.js redraws the dev-fee chart
       return;
     }
     const t = e.target.closest("#tailaxis button[data-axis]");

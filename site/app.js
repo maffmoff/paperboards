@@ -238,16 +238,15 @@
   // (src/depositors/devfee.ts), plus the live unclaimed accumulator and the recipient's Exchange balance.
   function renderDevFee(d) {
     // The team's fee income: how much has accrued in total (claimed + still unclaimed) and how it grew.
-    const f = d.devFee, box = $("devfeecharts");
-    const baseHint = "The team's half of every trading fee (1% of settled pnl) · accrued = claimed + unclaimed";
-    if (!f) { box.innerHTML = ""; $("devfeehint").textContent = "not indexed yet"; return; }
+    // Drawn into its slot in the Rules grid (stats.js creates the figure, between the projections and cost to mint).
+    const f = d.devFee, fig = document.querySelector('#rules-curves [data-curve="devfee"]');
+    if (!fig) return;
+    if (!f) { fig.querySelector("svg").innerHTML = ""; return; }
     const usdOf = (s18) => (s18 == null ? null : Number(big(s18) / 1000000000000n) / 1e6);
     const money = (v) => (v == null ? "–" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e4 ? `$${(v / 1e3).toFixed(0)}K` : `$${v.toFixed(0)}`);
     const claimed = usdOf(f.claimedTotal18), unclaimed = usdOf(f.unclaimed18);
     const accrued = claimed == null ? null : claimed + (unclaimed ?? 0);
-    $("devfeehint").textContent = baseHint;
-    box.innerHTML = `<figure class="chart"><figcaption><span>Dev fees accrued, cumulative</span><b class="cv"></b></figcaption><svg role="img" aria-label="cumulative dev fees accrued"></svg></figure>`;
-    const fig = box.querySelector(".chart");
+
     // Accrued (claimed + unclaimed) is read once per index run, from the first reading on; before it only the claim
     // events are known, so the line starts with the hourly claimed total and continues with the accrued readings.
     const acc = Array.isArray(f.accrued) ? f.accrued.filter((x) => x && Number.isFinite(x.usd)).map((x) => [x.ms, x.usd]) : [];
@@ -261,16 +260,14 @@
     const pts = [...(start != null && first != null && start < first ? [[start, 0]] : []), ...claimedPts, ...acc];
     if (!acc.length && pts.length && accrued != null) pts[pts.length - 1] = [pts[pts.length - 1][0], Math.max(pts[pts.length - 1][1] ?? 0, accrued)];
     if (pts.length >= 2 && ps) {
-      // The Rules horizon ahead at the recent accrual pace (median hourly increase over the last 24 h, band = its 25th–75th percentile).
-      const hz = ps.horizon(), proj = ps.linearProjection(pts, hz.days);
-      const notes = [];
+      // Observed only: fee accrual follows trading volume, which nothing here forecasts, so no projection.
+      const notes = ["The dev half of trading fees accrued so far: claimed + unclaimed"];
       if (claimedPts.length && acc.length) notes.push(`before ${hourLabel(from)}: claimed only (the unclaimed amount is read from then on)`);
-      if (proj.pace) notes.push(`next ${hz.days} days, if fees keep accruing as in the last 24 h: dashed at the median hourly pace (${money(proj.pace.mid)}/h), band = the 25th–75th percentile of those hours (${money(proj.pace.low)}–${money(proj.pace.high)}/h)`);
       ps.setInfo(fig, notes.join(" · "));
       let show = null;
-      show = ps.timeChart(fig, pts, money, (t) => show && show(t), { quiet: true, timeLabel: hz.timeLabel, future: proj.future, futureBand: proj.futureBand });
+      show = ps.timeChart(fig, pts, money, (t) => show && show(t), { quiet: true });
     } else {
-      box.querySelector(".cv").textContent = "not enough history yet";
+      fig.querySelector("svg").innerHTML = "";
     }
   }
 
@@ -282,7 +279,7 @@
     for (const el of document.querySelectorAll("[data-page]")) el.hidden = el.dataset.page !== view;
     for (const a of document.querySelectorAll(".views a")) a.classList.toggle("on", a.dataset.view === view);
     document.title = `paperboards · ${view}`;
-    if (view === "stats" && state.data) { renderStats(); renderDevFee(state.data); }
+    if (view === "stats" && state.data) renderStats();
   }
   window.addEventListener("hashchange", route);
   route();
@@ -290,7 +287,7 @@
   const linked = /[?&]q=([^&]*)/.exec(location.hash);
   if (linked) { state.q = safeDecode(linked[1]); $("q").value = state.q; }
   let resizeTimer = 0;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") { renderStats(); renderDevFee(state.data); } }, 150); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.data && location.hash === "#stats") renderStats(); }, 150); });
 
   function renderMeta(d) {
     const lines = [
@@ -303,9 +300,9 @@
     lines.push(`PAPER: paperTotal per wallet from the official leaderboard API (<code>/state/leaderboard/accounts</code>, window all); – = wallet not listed there · Share = PAPER ÷ total PAPER supply`);
     lines.push(`Trade PnL: totalWindowedPnl (realized + unrealized) per wallet from the same API; hover a value for the split · $/PAPER = −trade PnL ÷ PAPER (unrealized included; negative = in profit overall)`);
     if (d.staking) lines.push(`Rewards: USDC from PaperStaking <a href="${d.explorer}/address/${d.staking}" target="_blank" rel="noopener">${d.staking}</a> = claimed (Claimed events) + unclaimed (pendingReward(address) via Multicall3, read at each index run) · Net PnL = trade PnL + rewards`);
-    lines.push(`Activity: /query/protocol/history (hourly; 1-minute for the last 24 h, shown at 5 min) and /query/house/history (open interest) · TVL bars = deposits and withdrawals per bucket from the Exchange events · Open interest bars = notional opened (up) and closed (down) per bucket, derived as (volume ± Δopen interest) ÷ 2 · Net exposure = (long − short) ÷ (long + short) of open interest · APR = the last complete 24 h's staker rewards per staked PAPER, annualized, ÷ the all-time average cost per PAPER (−cumulative trader PnL ÷ supply)`);
+    lines.push(`Activity: /query/protocol/history (hourly; 1-minute for the last 24 h, shown at 5 min) and /query/house/history (open interest) · TVL bars = deposits and withdrawals per bucket from the Exchange events · Open interest bars = notional opened (up) and closed (down) per bucket, derived as (volume ± Δopen interest) ÷ 2 · Net exposure = (long − short) ÷ (long + short) of open interest · APR = the last complete 24 h's staker rewards per staked PAPER, annualized, ÷ the cost to mint one PAPER with no hedge at that time (1 ÷ (0.98 × mint rate))`);
     lines.push(`Max supply ≈ current supply + flat × D² ÷ (D + tail progress), from /query/protocol/summary; further dips of the pool below the cliff and liquidations mint more, and the owner can change the parameters`);
-    lines.push(`Cost to mint = (1 − win ratio) ÷ (0.98 × mint rate) for a BTC long + short pair opened together and closed at ±15 bps; win ratio from the docs' price-impact model · Valuation = max supply × today's cost to mint (not a market price)`);
+    lines.push(`Cost to mint = two bounds at today's mint rate r: the hedged floor 1 ÷ (8.31 × r) (a long + short pair with the widest exit; the win leg recovers at most 90% × 98% = 88.2% of the loss) and no hedge 1 ÷ (0.98 × r); the ratio is 8.48 at every rate · Valuation = max supply × today's cost to mint (not a market price)`);
     lines.push(`Counted losses = tail progress: the losses the mint curve has counted; projections assume volume and the loss rate stay as they are: the median hourly pace over the last 24 h, band = the 25th–75th percentile of those hours; before the 10-minute samples, rebuilt from the hourly PAPER supply`);
     if (d.devFee) lines.push(`Dev fee: the dev half of trading fees (docs: 2% win fee and 2% LP-side loss fee, half to stakers and half to the dev fee recipient) = claim events of the Exchange (topic 0x8163d4e6…) since genesis + the unclaimed devFeeAccumulator(), read at each index run`);
     $("meta").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
@@ -334,7 +331,7 @@
     } finally {
       loading = false;
     }
-    if (location.hash === "#stats") { renderStats(); renderDevFee(state.data); }
+    if (location.hash === "#stats") renderStats();
     $("updated").textContent = `Updated ${when(Math.floor(new Date(state.data.generatedAt).getTime() / 1000))}`;
     renderMeta(state.data);
     renderTable();
@@ -401,8 +398,24 @@
     data: () => state.data, entities, labelOf, shareOf, sharePct, costOf, paperAmt, usd, usd18, pct,
     search(q) { state.q = q; state.entity = null; $("q").value = q; state.page = 0; renderTable(); },
   };
-  // The Rules horizon switch (stats.js) also sets how far the dev-fee chart projects.
-  document.addEventListener("paperboards:horizon", () => { if (state.data && location.hash === "#stats") renderDevFee(state.data); });
+  // Theme: Auto (follow the system) → Light → Dark, stored per browser; the header bar color follows the page.
+  const THEMES = ["auto", "light", "dark"];
+  const applyTheme = (t) => {
+    if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+    $("themebtn").textContent = t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark";
+    const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
+  };
+  let theme = "auto";
+  try { const t = localStorage.getItem("paperboards.theme"); if (THEMES.includes(t)) theme = t; } catch { /* storage unavailable */ }
+  applyTheme(theme);
+  $("themebtn").addEventListener("click", () => {
+    theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+    try { if (theme === "auto") localStorage.removeItem("paperboards.theme"); else localStorage.setItem("paperboards.theme", theme); } catch { /* storage unavailable */ }
+    applyTheme(theme);
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (theme === "auto") applyTheme("auto"); });
+  // stats.js rebuilds the Rules grid (data, resize, axis or horizon switch) and then asks for the dev-fee figure in it.
+  document.addEventListener("paperboards:rules", () => { if (state.data) renderDevFee(state.data); });
   // Info badges: an explanation near the right edge opens to the left so it stays on screen.
   document.addEventListener("mouseover", (e) => { const b = e.target.closest(".info"); if (b) b.classList.toggle("flip", b.getBoundingClientRect().left > innerWidth * 0.6); });
   document.addEventListener("focusin", (e) => { const b = e.target.closest(".info"); if (b) b.classList.toggle("flip", b.getBoundingClientRect().left > innerWidth * 0.6); });
